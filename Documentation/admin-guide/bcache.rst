@@ -140,6 +140,86 @@ the backing devices to passthrough mode.
    writeback mode). It currently doesn't do anything intelligent if it fails to
    read some of the dirty data, though.
 
+SSD LONGEVITY: PER-PROCESS CACHE HINTING WITH IO PRIORITY
+---------------------------------------------------------
+
+Processes can be assigned an IO priority using `ionice` and bcache will
+either try to writeback or bypass the cache based on the IO priority
+level assigned to the process and the configuration of the syfs ioprio
+hints.  If configured properly for your workload, this can both increase
+performance and reduce SSD wear (erase/write cycles).
+
+Having idle IOs bypass the cache can increase performance elsewhere
+since you probably don't care about their performance.  In addition,
+this prevents idle IOs from promoting into (polluting) your cache and
+evicting blocks that are more important elsewhere.
+
+Default sysfs values:
+	2,7: ioprio_bypass is hinted for process IOs at-or-below best-effort-7.
+	0,0: ioprio_writeback hinting is disabled by default.
+
+Cache hinting is configured by writing 'class,level' pairs to sysfs.
+In this example, we write the following:
+
+    echo 2,7 > /sys/block/bcache0/bcache/ioprio_bypass
+    echo 2,0 > /sys/block/bcache0/bcache/ioprio_writeback
+
+Thus, processes with the following IO class (ionice -c) and level (-n)
+will the behave as shown in this table:
+
+	(-c) IO Class    (-n) Class level       Action
+	-----------------------------------------------------
+	(1) Realtime      0-7                   Writeback
+	(2) Best-effort     0                   Writeback
+	(2) Best-effort   1-6                   Normal, as if hinting were disabled
+	(2) Best-effort     7                   Bypass cache
+	(3) Idle          n/a                   Bypass cache
+
+For processes at-or-below best-effort-7 (ionice -c2 -n7), the
+ioprio_bypass behavior is as follows:
+
+* Reads will come from the backing device and will not promote into
+  (pollute) your cache.  If the block being read was already in the cache,
+  then it will be read from the cache (and remain cached).
+
+* If you are using writeback mode, then low-priority bypass-hinted writes
+  will go directly to the backing device.  If the write was dirty in
+  cache, it will cache-invalidate and write directly to the backing
+  device.  If a high-priority task later writes the same block then it
+  will writeback so no performance is lost for write-after-write.
+
+  For read-after-bypassed-write, the block will be read from the backing
+  device (not cached) so there may be a miss penalty when a low-priority
+  process write bypasses the cache followed by a high-priority read that
+  would otherwise have hit.  In practice, this is not an issue; to date,
+  none have wanted low-priority writes and high-priority reads of the
+  same block.
+
+For processes in our example at-or-above best-effort-0 (ionice -c2 -n0),
+the ioprio_writeback behavior is as follows:
+
+* The writeback hint has no effect unless your 'cache_mode' is writeback.
+  Assuming writeback mode, all writes at this priority will writeback.
+  Of course this will increase SSD wear, so only use writeback hinting
+  if you need it.
+
+* Reads are unaffected by ioprio_writeback, except that read-after-write
+  will of course read from the cache.
+
+Linux assigns processes the best-effort class with a level of 4 if
+no process is assigned  Thus, without `ionice` your processes will
+follow normal bcache should_writeback/should_bypass symantecs as if the
+ioprio_writeback/ioprio_bypass sysfs flags were disabled.
+
+Also note that in order to be hinted by ioprio_writeback/ioprio_bypass,
+the process must have a valid ioprio setting as returned by
+get_task_io_context()->ioprio. Thus, a process without an IO context
+will be ignored by the ioprio_writeback/ioprio_bypass hints even if your
+sysfs hints specify that best-effort-4 should be flagged for bypass
+or writeback.  If in doubt, explicitly set the process IO priority with
+`ionice`.
+
+See `man ionice` for more detail about per-process IO priority in Linux.
 
 Howto/cookbook
 --------------
