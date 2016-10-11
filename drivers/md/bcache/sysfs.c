@@ -130,6 +130,9 @@ rw_attribute(btree_shrinker_disabled);
 rw_attribute(copy_gc_enabled);
 rw_attribute(size);
 
+rw_attribute(ioprio_writeback);
+rw_attribute(ioprio_bypass);
+
 static ssize_t bch_snprint_string_list(char *buf, size_t size, const char * const list[],
 			    size_t selected)
 {
@@ -229,6 +232,17 @@ SHOW(__bch_cached_dev)
 		return strlen(buf);
 	}
 
+	if (attr == &sysfs_ioprio_bypass)
+		return snprintf(buf, PAGE_SIZE-1, "%d,%ld\n",
+			IOPRIO_PRIO_CLASS(dc->ioprio_bypass),
+			IOPRIO_PRIO_DATA(dc->ioprio_bypass));
+
+	if (attr == &sysfs_ioprio_writeback)
+		return snprintf(buf, PAGE_SIZE-1, "%d,%ld\n",
+			IOPRIO_PRIO_CLASS(dc->ioprio_writeback),
+			IOPRIO_PRIO_DATA(dc->ioprio_writeback));
+
+
 #undef var
 	return 0;
 }
@@ -241,6 +255,10 @@ STORE(__cached_dev)
 	ssize_t v;
 	struct cache_set *c;
 	struct kobj_uevent_env *env;
+	unsigned ioprio_class = 0; /* invalid initial ioprio values */
+	unsigned ioprio_level = IOPRIO_BE_NR;
+	unsigned short *ioprio_hint = NULL;
+	char *ioprio_type = NULL;
 
 #define d_strtoul(var)		sysfs_strtoul(var, dc->var)
 #define d_strtoul_nonzero(var)	sysfs_strtoul_clamp(var, dc->var, 1, INT_MAX)
@@ -349,6 +367,57 @@ STORE(__cached_dev)
 	if (attr == &sysfs_stop)
 		bcache_device_stop(&dc->disk);
 
+	/* ioprio hinting: we use ioprio_hint to reduce duplicate printk verbiage */
+	if (attr == &sysfs_ioprio_writeback) {
+		ioprio_hint = &dc->ioprio_writeback;
+		ioprio_type = "writeback";
+	}
+
+	if (attr == &sysfs_ioprio_bypass) {
+		ioprio_hint = &dc->ioprio_bypass;
+		ioprio_type = "bypass";
+	}
+
+	if (ioprio_hint != NULL)
+	{
+		if (sscanf(buf, "%u,%u", &ioprio_class, &ioprio_level) != 2
+			|| ioprio_class > IOPRIO_CLASS_IDLE
+			|| ioprio_level >= IOPRIO_BE_NR) {
+			pr_err("ioprio_%s invalid, expecting: (class,level) but parsed (%u,%u); ignored.",
+				ioprio_type,
+				ioprio_class, ioprio_level);
+			return size;
+		}
+
+		/* Use the maximum(/minimum) value in the class shift space to make integer
+		  comparison correct for ioprio_writeback(/ioprio_bypass) for IOPRIO_CLASS_IDLE.
+		  This is necessary because there are no ioprio levels for the idle class. */
+		if (ioprio_class == IOPRIO_CLASS_IDLE) {
+			if (ioprio_hint == &dc->ioprio_writeback)
+				ioprio_level = IOPRIO_PRIO_MASK;
+			else
+				/* Same, but 0 for bypass (inverted vs. writeback) */
+				ioprio_level = 0;
+		}
+
+		*ioprio_hint = IOPRIO_PRIO_VALUE(ioprio_class, ioprio_level);
+
+		if (!ioprio_valid(*ioprio_hint))
+			pr_info("disabled ioprio_%s hints.", ioprio_type);
+		else
+			pr_info("set hint for cache %s with priority %s: (class,level) = (%u,%u)",
+				ioprio_type,
+				( ioprio_hint == &dc->ioprio_writeback ? "at-or-above" : "at-or-below" ),
+				ioprio_class, ioprio_level);
+
+		if (ioprio_valid(dc->ioprio_writeback)
+			&& ioprio_valid(dc->ioprio_bypass)
+			&& dc->ioprio_writeback >= dc->ioprio_bypass)
+			pr_warning(
+				"warning: ioprio_writeback hint is neither disabled nor higher priority than the bypass hint; "
+				"will always writeback!");
+	}
+
 	return size;
 }
 
@@ -406,6 +475,8 @@ static struct attribute *bch_cached_dev_files[] = {
 	&sysfs_verify,
 	&sysfs_bypass_torture_test,
 #endif
+	&sysfs_ioprio_bypass,
+	&sysfs_ioprio_writeback,
 	NULL
 };
 KTYPE(bch_cached_dev);

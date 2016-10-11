@@ -376,6 +376,8 @@ static bool check_should_bypass(struct cached_dev *dc, struct bio *bio)
 	unsigned sectors, congested = bch_get_congested(c);
 	struct task_struct *task = current;
 	struct io *i;
+	struct io_context *ioc;
+	unsigned short ioprio;
 
 	if (test_bit(BCACHE_DEV_DETACHING, &dc->disk.flags) ||
 	    c->gc_stats.in_use > CUTOFF_CACHE_ADD ||
@@ -394,6 +396,28 @@ static bool check_should_bypass(struct cached_dev *dc, struct bio *bio)
 	if (bio->bi_opf & (REQ_RAHEAD|REQ_BACKGROUND) &&
 	    !(bio->bi_opf & REQ_META))
 		goto skip;
+
+	/* If the ioprio already exists on the bio, use that.  We assume that
+	 * the upper layer properly assigned the calling process's ioprio to
+	 * the bio being passed to bcache. Otherwise, use current's ioc. */
+	ioprio = bio_prio(bio);
+	if (!ioprio_valid(ioprio)) {
+		ioc = get_task_io_context(current, GFP_NOIO, NUMA_NO_NODE);
+		if (ioc) {
+			if (ioprio_valid(ioc->ioprio))
+				ioprio = ioc->ioprio;
+			put_io_context(ioc);
+			ioc = NULL;
+		}
+	}
+
+	/* If process ioprio is lower-or-equal to dc->ioprio_bypass, then
+	 * hint for bypass. Note that a lower-priority IO class+value
+	 * has a greater numeric value. */
+	if (ioprio_valid(ioprio) && ioprio_valid(dc->ioprio_writeback)
+		&& ioprio >= dc->ioprio_bypass) {
+		goto skip;
+	}
 
 	if (bio->bi_iter.bi_sector & (c->sb.block_size - 1) ||
 	    bio_sectors(bio) & (c->sb.block_size - 1)) {
