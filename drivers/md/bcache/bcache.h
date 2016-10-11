@@ -402,6 +402,9 @@ struct cached_dev {
 	 */
 #define BCH_WBRATE_UPDATE_MAX_SKIPS	15
 	unsigned int		rate_update_retry;
+
+	unsigned short		ioprio_writeback;
+	unsigned short		ioprio_bypass;
 };
 
 enum alloc_reserve {

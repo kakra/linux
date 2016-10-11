@@ -103,6 +103,7 @@ static inline bool should_writeback(struct cached_dev *dc, struct bio *bio,
 				    unsigned int cache_mode, bool would_skip)
 {
 	unsigned int in_use = dc->disk.c->gc_stats.in_use;
+	unsigned short ioprio;
 
 	if (cache_mode != CACHE_MODE_WRITEBACK ||
 	    test_bit(BCACHE_DEV_DETACHING, &dc->disk.flags) ||
@@ -119,6 +120,15 @@ static inline bool should_writeback(struct cached_dev *dc, struct bio *bio,
 
 	if (would_skip)
 		return false;
+
+	/* If process ioprio is higher-or-equal to dc->ioprio_writeback, then
+	 * hint for writeback. Note that a higher-priority IO class+value
+	 * has a lesser numeric value. */
+	ioprio = bio_prio(bio);
+	if (ioprio_valid(ioprio) && ioprio_valid(dc->ioprio_writeback)
+		&& ioprio <= dc->ioprio_writeback) {
+		return true;
+	}
 
 	return (op_is_sync(bio->bi_opf) ||
 		bio->bi_opf & (REQ_META|REQ_PRIO) ||
