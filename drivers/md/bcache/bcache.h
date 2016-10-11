@@ -393,6 +393,9 @@ struct cached_dev {
 	atomic_t		io_errors;
 	unsigned		error_limit;
 
+	unsigned short		ioprio_writeback;
+	unsigned short		ioprio_bypass;
+
 	char			backing_dev_name[BDEVNAME_SIZE];
 };
 

@@ -722,6 +722,16 @@ void bch_cached_dev_writeback_init(struct cached_dev *dc)
 	dc->writeback_rate_p_term_inverse = 40;
 	dc->writeback_rate_i_term_inverse = 10000;
 
+	/*
+	 * These defaults provide the best SSD life by enabling bypass
+	 * for priorities at-or-below BE-7. This also provides better
+	 * performance (cache hits) by preventing (near-)idle processes from
+	 * polluting the cache working set.  Only set ioprio_writeback if
+	 * you really need it: it will wear out your SSD sooner.
+	 */
+	dc->ioprio_writeback = IOPRIO_PRIO_VALUE(0, 0);
+	dc->ioprio_bypass    = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, (IOPRIO_BE_NR-1));
+
 	WARN_ON(test_and_clear_bit(BCACHE_DEV_WB_RUNNING, &dc->disk.flags));
 	INIT_DELAYED_WORK(&dc->writeback_rate_update, update_writeback_rate);
 }

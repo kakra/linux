@@ -76,6 +76,8 @@ static inline bool should_writeback(struct cached_dev *dc, struct bio *bio,
 				    unsigned cache_mode, bool would_skip)
 {
 	unsigned in_use = dc->disk.c->gc_stats.in_use;
+	struct io_context *ioc;
+	unsigned short ioprio;
 
 	if (cache_mode != CACHE_MODE_WRITEBACK ||
 	    test_bit(BCACHE_DEV_DETACHING, &dc->disk.flags) ||
@@ -89,6 +91,28 @@ static inline bool should_writeback(struct cached_dev *dc, struct bio *bio,
 
 	if (would_skip)
 		return false;
+
+	/* If the ioprio already exists on the bio, use that.  We assume that
+	 * the upper layer properly assigned the calling process's ioprio to
+	 * the bio being passed to bcache. Otherwise, use current's ioc. */
+	ioprio = bio_prio(bio);
+	if (!ioprio_valid(ioprio)) {
+		ioc = get_task_io_context(current, GFP_NOIO, NUMA_NO_NODE);
+		if (ioc) {
+			if (ioprio_valid(ioc->ioprio))
+				ioprio = ioc->ioprio;
+			put_io_context(ioc);
+			ioc = NULL;
+		}
+	}
+
+	/* If process ioprio is higher-or-equal to dc->ioprio_writeback, then
+	 * hint for writeback. Note that a higher-priority IO class+value
+	 * has a lesser numeric value. */
+	if (ioprio_valid(ioprio) && ioprio_valid(dc->ioprio_writeback)
+		&& ioprio <= dc->ioprio_writeback) {
+		return true;
+	}
 
 	return (op_is_sync(bio->bi_opf) ||
 		bio->bi_opf & (REQ_META|REQ_PRIO) ||
