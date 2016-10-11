@@ -396,6 +396,9 @@ struct cached_dev {
 	unsigned int		error_limit;
 	unsigned int		offline_seconds;
 
+	unsigned short		ioprio_writeback;
+	unsigned short		ioprio_bypass;
+
 	char			backing_dev_name[BDEVNAME_SIZE];
 };
 
