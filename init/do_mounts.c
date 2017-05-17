@@ -474,7 +474,9 @@ void __init prepare_namespace(void)
 	 * For example, it is not atypical to wait 5 seconds here
 	 * for the touchpad of a laptop to initialize.
 	 */
+	async_synchronize_full();
 	wait_for_device_probe();
+	async_synchronize_full();
 
 	md_run_setup();
 
