@@ -4235,6 +4235,16 @@ static inline int l2cap_config_rsp(struct l2cap_conn *conn,
 				goto done;
 			break;
 		}
+	case L2CAP_CONF_UNKNOWN:
+		/* Ignore unkwown option for RFC in case of basic mode as it
+		 * is considered the default mode:
+		 * BLUETOOTH SPECIFICATION Version 4.2 [Vol 3, Part A] page 96:
+		 * The Basic L2CAP mode is the default.
+		 */
+		if (rsp->data == L2CAP_CONF_RFC &&
+		    chan->mode == L2CAP_MODE_BASIC) {
+			break;
+		}
 
 	default:
 		l2cap_chan_set_err(chan, ECONNRESET);
