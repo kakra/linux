@@ -14,6 +14,8 @@
 #include <linux/security.h>
 #include <crypto/public_key.h>
 #include <uapi/linux/module.h>
+#include <linux/efi.h>
+
 #include "internal.h"
 
 #undef MODULE_PARAM_PREFIX
@@ -21,6 +23,11 @@
 
 static bool sig_enforce = IS_ENABLED(CONFIG_MODULE_SIG_FORCE);
 module_param(sig_enforce, bool_enable_only, 0644);
+/* Allow disabling module signature requirement by adding boot param */
+static bool sig_unenforce = false;
+module_param(sig_unenforce, bool_enable_only, 0644);
+
+extern struct boot_params boot_params;
 
 /*
  * Export sig_enforce kernel cmdline parameter to allow other subsystems rely
@@ -28,6 +35,8 @@ module_param(sig_enforce, bool_enable_only, 0644);
  */
 bool is_module_sig_enforced(void)
 {
+	if (sig_unenforce)
+		return false;
 	return sig_enforce;
 }
 EXPORT_SYMBOL(is_module_sig_enforced);
