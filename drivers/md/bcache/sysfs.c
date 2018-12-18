@@ -67,6 +67,7 @@ read_attribute(written);
 read_attribute(btree_written);
 read_attribute(metadata_written);
 read_attribute(active_journal_entries);
+read_attribute(backing_dev_name);
 
 sysfs_time_stats_attribute(btree_gc,	sec, ms);
 sysfs_time_stats_attribute(btree_split, sec, us);
@@ -243,6 +244,12 @@ SHOW(__bch_cached_dev)
 		return strlen(buf);
 	}
 
+	if (attr == &sysfs_backing_dev_name) {
+		snprintf(buf, BDEVNAME_SIZE + 1, "%s", dc->backing_dev_name);
+		strcat(buf, "\n");
+		return strlen(buf);
+	}
+
 	if (attr == &sysfs_ioprio_bypass)
 		return snprintf(buf, PAGE_SIZE-1, "%d,%ld\n",
 			IOPRIO_PRIO_CLASS(dc->ioprio_bypass),
@@ -252,7 +259,6 @@ SHOW(__bch_cached_dev)
 		return snprintf(buf, PAGE_SIZE-1, "%d,%ld\n",
 			IOPRIO_PRIO_CLASS(dc->ioprio_writeback),
 			IOPRIO_PRIO_DATA(dc->ioprio_writeback));
-
 
 #undef var
 	return 0;
@@ -500,6 +506,7 @@ static struct attribute *bch_cached_dev_files[] = {
 	&sysfs_verify,
 	&sysfs_bypass_torture_test,
 #endif
+	&sysfs_backing_dev_name,
 	&sysfs_ioprio_bypass,
 	&sysfs_ioprio_writeback,
 	NULL
