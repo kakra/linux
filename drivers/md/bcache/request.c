@@ -397,9 +397,13 @@ static bool check_should_bypass(struct cached_dev *dc, struct bio *bio)
 	 * unless the read-ahead request is for metadata
 	 * (eg, for gfs2 or xfs).
 	 */
-	if (bio->bi_opf & (REQ_RAHEAD|REQ_BACKGROUND) &&
-	    !(bio->bi_opf & (REQ_META|REQ_PRIO)))
-		goto skip;
+	if (!(bio->bi_opf & (REQ_META|REQ_PRIO)))
+	{
+		if (dc->bypass_readahead_io && (bio->bi_opf & REQ_RAHEAD))
+			goto skip;
+		if (dc->bypass_background_io && (bio->bi_opf & REQ_BACKGROUND))
+			goto skip;
+	}
 
 	/* If the ioprio already exists on the bio, use that.  We assume that
 	 * the upper layer properly assigned the calling process's ioprio to
