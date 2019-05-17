@@ -47,6 +47,7 @@ fixes/update part 1.1  Stefani Seibold <stefani@seibold.net>    June 9 2009
   3.10  /proc/<pid>/timerslack_ns - Task timerslack value
   3.11	/proc/<pid>/patch_state - Livepatch patch operation state
   3.12	/proc/<pid>/arch_status - Task architecture specific information
+  3.13  /proc/<pid>/ksm - Remote KSM
 
   4	Configuring procfs
   4.1	Mount options
@@ -2173,6 +2174,19 @@ AVX512_elapsed_ms
   A special value of '-1' indicates that no AVX512 usage was recorded, thus
   the task is unlikely an AVX512 user, but depends on the workload and the
   scheduling scenario, it also could be a false negative mentioned above.
+
+3.13    /proc/<pid>/ksm - Remote KSM
+------------------------------------
+This write-only file allows marking memory of another task for merging
+and unmerging via KSM.
+
+The following actions are available:
+
+  * mark task's memory as mergeable:
+    # echo merge > /proc/<pid>/ksm
+
+  * unmerging all the task's memory:
+    # echo unmerge > /proc/<pid>/ksm
 
 Chapter 4: Configuring procfs
 =============================
