@@ -96,6 +96,8 @@
 #include <linux/time_namespace.h>
 #include <linux/resctrl.h>
 #include <linux/cn_proc.h>
+#include <linux/mman.h>
+#include <linux/ksm.h>
 #include <trace/events/oom.h>
 #include "internal.h"
 #include "fd.h"
@@ -3165,6 +3167,144 @@ static int proc_stack_depth(struct seq_file *m, struct pid_namespace *ns,
 }
 #endif /* CONFIG_STACKLEAK_METRICS */
 
+#ifdef CONFIG_KSM
+static int ksm_open(struct inode *inode, struct file *file)
+{
+	struct task_struct *task;
+	struct mm_struct *mm;
+	int err;
+
+	task = get_proc_task(inode);
+	if (!task) {
+		err = -ESRCH;
+		goto out;
+	}
+	if (task->flags & PF_KTHREAD) {
+		put_task_struct(task);
+		err = -EINVAL;
+		goto out;
+	}
+
+	mm = mm_access(task, PTRACE_MODE_ATTACH_FSCREDS);
+	put_task_struct(task);
+	if (!mm) {
+		err = -EINVAL;
+		goto out;
+	}
+	if (IS_ERR(mm)) {
+		err = PTR_ERR(mm);
+		goto out;
+	}
+
+	/* ensure this mm_struct can't be freed */
+	mmgrab(mm);
+	/* but do not pin its memory */
+	mmput(mm);
+
+	err = 0;
+	file->private_data = mm;
+
+out:
+	return err;
+}
+
+static ssize_t ksm_write(struct file *file, const char __user *buf,
+		size_t count, loff_t *ppos)
+{
+	char kbuf[PROC_NUMBUF];
+	char *pos;
+	int behaviour;
+	struct mm_struct *mm = file->private_data;
+	int err;
+	int last_err;
+	struct vm_area_struct *vma;
+
+	if (!mm) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	/* Only allow a very narrow range of strings to be written */
+	if ((*ppos != 0) || (count >= sizeof(kbuf))) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	/* What was written? */
+	if (copy_from_user(kbuf, buf, count)) {
+		err = -EFAULT;
+		goto out;
+	}
+	kbuf[count] = '\0';
+	pos = kbuf;
+
+	/* What is being requested? */
+	if (strncmp(pos, "merge", 5) == 0) {
+		pos += 5;
+		behaviour = MADV_MERGEABLE;
+	}
+	else if (strncmp(pos, "unmerge", 7) == 0) {
+		pos += 7;
+		behaviour = MADV_UNMERGEABLE;
+	}
+	else {
+		err = -EINVAL;
+		goto out;
+	}
+
+	/* Verify there is not trailing junk on the line */
+	pos = skip_spaces(pos);
+	if (*pos != '\0') {
+		err = -EINVAL;
+		goto out;
+	}
+
+	if (!mmget_not_zero(mm)) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	mmap_write_lock(mm);
+
+	err = 0;
+
+	vma = mm->mmap;
+	while (vma) {
+		if (behaviour == MADV_MERGEABLE)
+			last_err = ksm_madvise_merge(vma->vm_mm, vma, &vma->vm_flags);
+		else
+			last_err = ksm_madvise_unmerge(vma, vma->vm_start, vma->vm_end, &vma->vm_flags);
+		if (last_err)
+			err = last_err;
+		vma = vma->vm_next;
+	}
+
+	mmap_write_unlock(mm);
+
+	mmput(mm);
+
+out:
+	return err ? err : count;
+}
+
+static int ksm_release(struct inode *inode, struct file *file)
+{
+	struct mm_struct *mm = file->private_data;
+
+	if (mm)
+		mmdrop(mm);
+
+	return 0;
+}
+
+static const struct file_operations proc_ksm_operations = {
+	.open		= ksm_open,
+	.write		= ksm_write,
+	.llseek		= noop_llseek,
+	.release	= ksm_release,
+};
+#endif /* CONFIG_KSM */
+
 /*
  * Thread groups
  */
@@ -3280,6 +3420,9 @@ static const struct pid_entry tgid_base_stuff[] = {
 #endif
 #ifdef CONFIG_SECCOMP_CACHE_DEBUG
 	ONE("seccomp_cache", S_IRUSR, proc_pid_seccomp_cache),
+#endif
+#ifdef CONFIG_KSM
+	REG("ksm", S_IRUGO|S_IWUSR, proc_ksm_operations),
 #endif
 };
 
