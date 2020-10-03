@@ -410,12 +410,13 @@ static bool check_should_bypass(struct cached_dev *dc, struct bio *bio)
 		}
 	}
 
-	/* If process ioprio is lower-or-equal to dc->ioprio_bypass, then
-	 * hint for bypass. Note that a lower-priority IO class+value
-	 * has a greater numeric value. */
+	/* If process ioprio is lower-or-equal to dc->ioprio_bypass, and the
+	 * request is not REQ_META|REQ_PRIO, then hint for bypass. Note that a
+	 * lower-priority IO class+value has a greater numeric value. */
 	if (ioprio_valid(ioprio) && ioprio_valid(dc->ioprio_writeback)
 		&& ioprio >= dc->ioprio_bypass) {
-		goto skip;
+		if (!(bio->bi_opf & (REQ_META|REQ_PRIO)))
+			goto skip;
 	}
 
 	if (bio->bi_iter.bi_sector & (c->cache->sb.block_size - 1) ||
