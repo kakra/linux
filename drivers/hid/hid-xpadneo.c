@@ -1,4 +1,4 @@
-#define DRV_VER "0.8"
+#define DRV_VER "0.9-alpha"
 
 /*
  * Force feedback support for XBOX ONE S and X gamepads via Bluetooth
@@ -74,12 +74,12 @@ MODULE_PARM_DESC(disable_deadzones,
 		 "(bool) Disable dead zone handling for raw processing by Wine/Proton, confuses joydev. "
 		 "0: disable, 1: enable.");
 
-#define XPADNEO_QUIRK_NO_PULSE          BIT(0)
-#define XPADNEO_QUIRK_NO_TRIGGER_RUMBLE BIT(1)
-#define XPADNEO_QUIRK_NO_MOTOR_MASK     BIT(2)
-#define XPADNEO_QUIRK_USE_HW_PROFILES   BIT(3)
-#define XPADNEO_QUIRK_LINUX_BUTTONS     BIT(4)
-#define XPADNEO_QUIRK_NINTENDO          BIT(5)
+#define XPADNEO_QUIRK_NO_PULSE          1
+#define XPADNEO_QUIRK_NO_TRIGGER_RUMBLE 2
+#define XPADNEO_QUIRK_NO_MOTOR_MASK     4
+#define XPADNEO_QUIRK_USE_HW_PROFILES   8
+#define XPADNEO_QUIRK_LINUX_BUTTONS     16
+#define XPADNEO_QUIRK_NINTENDO          32
 
 static struct {
 	char *args[17];
@@ -110,7 +110,7 @@ static enum power_supply_property xpadneo_battery_props[] = {
 #define XPADNEO_RUMBLE_THROTTLE_DELAY   (10L * HZ / 1000)
 #define XPADNEO_RUMBLE_THROTTLE_JIFFIES (jiffies + XPADNEO_RUMBLE_THROTTLE_DELAY)
 
-enum {
+enum xpadneo_rumble_motors {
 	FF_RUMBLE_NONE = 0x00,
 	FF_RUMBLE_WEAK = 0x01,
 	FF_RUMBLE_STRONG = 0x02,
@@ -119,10 +119,10 @@ enum {
 	FF_RUMBLE_LEFT = 0x08,
 	FF_RUMBLE_TRIGGERS = FF_RUMBLE_LEFT | FF_RUMBLE_RIGHT,
 	FF_RUMBLE_ALL = 0x0F
-};
+} __packed;
 
 struct ff_data {
-	u8 enable;
+	enum xpadneo_rumble_motors enable;
 	u8 magnitude_left;
 	u8 magnitude_right;
 	u8 magnitude_strong;
@@ -131,13 +131,26 @@ struct ff_data {
 	u8 pulse_release_10ms;
 	u8 loop_count;
 } __packed;
+#ifdef static_assert		// cppcheck-suppress ConfigurationNotChecked
+static_assert(sizeof(struct ff_data) == 8);
+#endif
 
 #define XPADNEO_XB1S_FF_REPORT 0x03
-#define XPADNEO_REPORT_0x01_LENGTH (38+1)
+#define XPADNEO_REPORT_0x01_LENGTH (55+1)
 
 struct ff_report {
 	u8 report_id;
 	struct ff_data ff;
+} __packed;
+#ifdef static_assert		// cppcheck-suppress ConfigurationNotChecked
+static_assert(sizeof(struct ff_report) == 9);
+#endif
+
+enum xpadneo_trigger_scale {
+	XBOX_TRIGGER_SCALE_FULL,
+	XBOX_TRIGGER_SCALE_HALF,
+	XBOX_TRIGGER_SCALE_DIGITAL,
+	XBOX_TRIGGER_SCALE_NUM
 } __packed;
 
 struct xpadneo_devdata {
@@ -154,6 +167,11 @@ struct xpadneo_devdata {
 	/* profile switching */
 	bool xbox_button_down, profile_switched;
 	u8 profile;
+
+	/* trigger scale */
+	struct {
+		u8 left, right;
+	} trigger_scale;
 
 	/* battery information */
 	struct {
@@ -246,18 +264,20 @@ static const struct usage_map xpadneo_usage_maps[] = {
 	/* disable duplicate button */
 	USAGE_IGN(0xC0224),
 
+	/* hardware features handled at the raw report level */
+	USAGE_IGN(0xC0085),	/* Profile switcher */
+	USAGE_IGN(0xC0099),	/* Trigger scale switches */
+
 	/* XBE2: Disable "dial", which is a redundant representation of the D-Pad */
 	USAGE_IGN(0x10037),
 
-	/* XBE2: Disable blind axes */
-	USAGE_IGN(0x10040),	/* Vx */
-	USAGE_IGN(0x10041),	/* Vy */
-	USAGE_IGN(0x10042),	/* Vz */
-	USAGE_IGN(0x10043),	/* Vbrx */
-	USAGE_IGN(0x10044),	/* Vbry */
-	USAGE_IGN(0x10045),	/* Vbrz */
-
-	/* XBE2: Disable duplicate buttons */
+	/* XBE2: Disable duplicate report fields of broken v1 packet format */
+	USAGE_IGN(0x10040),	/* Vx, copy of X axis */
+	USAGE_IGN(0x10041),	/* Vy, copy of Y axis */
+	USAGE_IGN(0x10042),	/* Vz, copy of Z axis */
+	USAGE_IGN(0x10043),	/* Vbrx, copy of Rx */
+	USAGE_IGN(0x10044),	/* Vbry, copy of Ry */
+	USAGE_IGN(0x10045),	/* Vbrz, copy of Rz */
 	USAGE_IGN(0x90010),	/* copy of A */
 	USAGE_IGN(0x90011),	/* copy of B */
 	USAGE_IGN(0x90013),	/* copy of X */
@@ -271,7 +291,6 @@ static const struct usage_map xpadneo_usage_maps[] = {
 
 	/* XBE2: Disable extra features until proper support is implemented */
 	USAGE_IGN(0xC0081),	/* Four paddles */
-	USAGE_IGN(0xC0085),	/* Profile switcher */
 
 	/* XBE2: Disable unused buttons */
 	USAGE_IGN(0x90012),	/* 6 "TRIGGER_HAPPY" buttons */
@@ -306,11 +325,12 @@ static void xpadneo_ff_worker(struct work_struct *work)
 	if (likely((xdata->quirks & XPADNEO_QUIRK_NO_PULSE) == 0)) {
 		/*
 		 * ff-memless has a time resolution of 50ms but we pulse the
-		 * motors as long as possible as we also optimize out
-		 * repeated motor programming below
+		 * motors for 60s as the Windows driver does. To work around
+		 * a potential firmware crash, we filter out repeated motor
+		 * programming further below.
 		 */
-		r->ff.pulse_sustain_10ms = U8_MAX;
-		r->ff.loop_count = U8_MAX;
+		r->ff.pulse_sustain_10ms = 0xFF;
+		r->ff.loop_count = 0xEB;
 	}
 
 	spin_lock_irqsave(&xdata->ff_lock, flags);
@@ -359,9 +379,8 @@ static void xpadneo_ff_worker(struct work_struct *work)
 	spin_unlock_irqrestore(&xdata->ff_lock, flags);
 
 	/* do not send these bits if not supported */
-	if (unlikely(xdata->quirks & XPADNEO_QUIRK_NO_MOTOR_MASK)) {
+	if (unlikely(xdata->quirks & XPADNEO_QUIRK_NO_MOTOR_MASK))
 		r->ff.enable = 0;
-	}
 
 	ret = hid_hw_output_report(hdev, (__u8 *) r, sizeof(*r));
 	if (ret < 0)
@@ -459,8 +478,8 @@ static int xpadneo_ff_play(struct input_dev *dev, void *data, struct ff_effect *
 		break;
 	case PARAM_TRIGGER_RUMBLE_PRESSURE:
 		fraction_MAIN = percent_MAIN;
-		fraction_TL = max(0, xdata->last_abs_z * percent_TRIGGERS / 1023);
-		fraction_TR = max(0, xdata->last_abs_rz * percent_TRIGGERS / 1023);
+		fraction_TL = (xdata->last_abs_z * percent_TRIGGERS + 511) / 1023;
+		fraction_TR = (xdata->last_abs_rz * percent_TRIGGERS + 511) / 1023;
 		break;
 	default:
 		fraction_MAIN = percent_MAIN;
@@ -478,12 +497,12 @@ static int xpadneo_ff_play(struct input_dev *dev, void *data, struct ff_effect *
 	spin_lock_irqsave(&xdata->ff_lock, flags);
 
 	/* calculate the physical magnitudes, scale from 16 bit to 0..100 */
-	xdata->ff.magnitude_strong = (u8)((strong * fraction_MAIN) / U16_MAX);
-	xdata->ff.magnitude_weak = (u8)((weak * fraction_MAIN) / U16_MAX);
+	xdata->ff.magnitude_strong = (u8)((strong * fraction_MAIN + S16_MAX) / U16_MAX);
+	xdata->ff.magnitude_weak = (u8)((weak * fraction_MAIN + S16_MAX) / U16_MAX);
 
 	/* calculate the physical magnitudes, scale from 16 bit to 0..100 */
-	xdata->ff.magnitude_left = (u8)((max_main * fraction_TL) / U16_MAX);
-	xdata->ff.magnitude_right = (u8)((max_main * fraction_TR) / U16_MAX);
+	xdata->ff.magnitude_left = (u8)((max_main * fraction_TL + S16_MAX) / U16_MAX);
+	xdata->ff.magnitude_right = (u8)((max_main * fraction_TR + S16_MAX) / U16_MAX);
 
 	/* synchronize: is our worker still scheduled? */
 	if (xdata->ff_scheduled) {
@@ -498,17 +517,11 @@ static int xpadneo_ff_play(struct input_dev *dev, void *data, struct ff_effect *
 	if (time_before(ff_run_at, ff_throttle_until)) {
 		/* last rumble was recently executed */
 		delay_work = (long)ff_throttle_until - (long)ff_run_at;
+		delay_work = clamp(delay_work, 0L, (long)HZ);
 	} else {
 		/* the firmware is ready */
 		delay_work = 0;
 	}
-
-	/*
-	 * sanitize: If 0 > delay > 1000ms, something is weird: this
-	 * may happen if the delay between two rumble requests is
-	 * several weeks long
-	 */
-	delay_work = clamp(delay_work, 0L, (long)HZ);
 
 	/* schedule writing a rumble report to the controller */
 	if (queue_delayed_work(xpadneo_rumble_wq, &xdata->ff_worker, delay_work))
@@ -860,12 +873,34 @@ static void xpadneo_switch_profile(struct xpadneo_devdata *xdata, const u8 profi
 				   const bool emulated)
 {
 	if (xdata->profile != profile) {
-		hid_info(xdata->hdev, "Switching profile to %d\n", profile);
+		hid_info(xdata->hdev, "switching profile to %d\n", profile);
 		xdata->profile = profile;
 	}
 
 	/* Indicate to profile emulation that a request was made */
 	xdata->profile_switched = emulated;
+}
+
+static void xpadneo_switch_triggers(struct xpadneo_devdata *xdata, const u8 mode)
+{
+	char *name[XBOX_TRIGGER_SCALE_NUM] = {
+		[XBOX_TRIGGER_SCALE_FULL] = "full range",
+		[XBOX_TRIGGER_SCALE_HALF] = "half range",
+		[XBOX_TRIGGER_SCALE_DIGITAL] = "digital",
+	};
+
+	enum xpadneo_trigger_scale left = (mode >> 0) & 0x03;
+	enum xpadneo_trigger_scale right = (mode >> 2) & 0x03;
+
+	if ((xdata->trigger_scale.left != left) && (left < XBOX_TRIGGER_SCALE_NUM)) {
+		hid_info(xdata->hdev, "switching left trigger to %s mode\n", name[left]);
+		xdata->trigger_scale.left = left;
+	}
+
+	if ((xdata->trigger_scale.right != right) && (right < XBOX_TRIGGER_SCALE_NUM)) {
+		hid_info(xdata->hdev, "switching right trigger to %s mode\n", name[right]);
+		xdata->trigger_scale.right = right;
+	}
 }
 
 #define SWAP_BITS(v,b1,b2) \
@@ -915,9 +950,17 @@ static int xpadneo_raw_event(struct hid_device *hdev, struct hid_report *report,
 		data[14] = SWAP_BITS(data[14], 2, 3);
 	}
 
-	if (report->id == 1 && reportsize == 55) {
-		/* XBE2: track the current controller profile */
-		xpadneo_switch_profile(xdata, data[35] & 0x03, false);
+	/* XBE2: track the current controller settings */
+	if (report->id == 1 && reportsize >= 21) {
+		if (reportsize == 55) {
+			hid_notice_once(hdev,
+					"detected broken XBE2 v1 packet format, please update the firmware");
+			xpadneo_switch_profile(xdata, data[35] & 0x03, false);
+			xpadneo_switch_triggers(xdata, data[36] & 0x0F);
+		} else {
+			xpadneo_switch_profile(xdata, data[19] & 0x03, false);
+			xpadneo_switch_triggers(xdata, data[20] & 0x0F);
+		}
 	}
 
 	return 0;
