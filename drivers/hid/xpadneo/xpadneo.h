@@ -13,8 +13,9 @@
 
 #include <linux/hid.h>
 
-#include "hid-ids.h"
-#include "xpadneo-version.h"
+#include "../hid-ids.h"
+
+#define XPADNEO_VERSION "v0.9.9999-git"
 
 /* helper for printing a notice only once */
 #ifndef hid_notice_once
@@ -28,15 +29,24 @@ do {									\
 } while (0)
 #endif
 
+/* benchmark helper */
+#define xpadneo_benchmark_start(name) \
+do { \
+	unsigned long __##name_jiffies = jiffies; \
+	pr_info("xpadneo " #name " start\n")
+#define xpadneo_benchmark_stop(name) \
+	pr_info("xpadneo " #name " took %ums\n", jiffies_to_msecs(jiffies - __##name_jiffies)); \
+} while (0)
+
 /* button aliases */
 #define BTN_PADDLES(b) (BTN_TRIGGER_HAPPY37+(b))
-#define BTN_SHARE      BTN_TRIGGER_HAPPY1
+#define BTN_SHARE      KEY_F12
 #define BTN_XBOX       BTN_MODE
 
 /* module parameter "trigger_rumble_mode" */
-#define PARAM_TRIGGER_RUMBLE_PRESSURE    0
-#define PARAM_TRIGGER_RUMBLE_DIRECTIONAL 1
-#define PARAM_TRIGGER_RUMBLE_DISABLE     2
+#define PARAM_TRIGGER_RUMBLE_PRESSURE 0
+#define PARAM_TRIGGER_RUMBLE_RESERVED 1
+#define PARAM_TRIGGER_RUMBLE_DISABLE  2
 
 /* module parameter "quirks" */
 #define XPADNEO_QUIRK_NO_PULSE          1
@@ -46,6 +56,7 @@ do {									\
 #define XPADNEO_QUIRK_LINUX_BUTTONS     16
 #define XPADNEO_QUIRK_NINTENDO          32
 #define XPADNEO_QUIRK_SHARE_BUTTON      64
+#define XPADNEO_QUIRK_REVERSE_MASK      128
 
 /* timing of rumble commands to work around firmware crashes */
 #define XPADNEO_RUMBLE_THROTTLE_DELAY   msecs_to_jiffies(50)
@@ -105,6 +116,10 @@ enum xpadneo_trigger_scale {
 	XBOX_TRIGGER_SCALE_NUM
 } __packed;
 
+#define XPADNEO_MISSING_CONSUMER 1
+#define XPADNEO_MISSING_GAMEPAD  2
+#define XPADNEO_MISSING_KEYBOARD 4
+
 /* private driver instance data */
 struct xpadneo_devdata {
 	/* unique physical device id (randomly assigned) */
@@ -112,7 +127,8 @@ struct xpadneo_devdata {
 
 	/* logical device interfaces */
 	struct hid_device *hdev;
-	struct input_dev *idev;
+	struct input_dev *consumer, *gamepad, *keyboard;
+	short int missing_reported;
 
 	/* revert fixups on removal */
 	u16 original_product;
@@ -125,6 +141,9 @@ struct xpadneo_devdata {
 	/* profile switching */
 	bool xbox_button_down, profile_switched;
 	u8 profile;
+
+	/* mouse mode */
+	bool mouse_mode;
 
 	/* trigger scale */
 	struct {
@@ -159,5 +178,9 @@ struct xpadneo_devdata {
 	struct ff_data ff_shadow;
 	void *output_report_dmabuf;
 };
+
+extern int xpadneo_init_consumer(struct xpadneo_devdata *);
+extern int xpadneo_init_keyboard(struct xpadneo_devdata *);
+extern int xpadneo_init_synthetic(struct xpadneo_devdata *, char *, struct input_dev **);
 
 #endif
