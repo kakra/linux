@@ -28,16 +28,25 @@ do {									\
 } while (0)
 #endif
 
+/* benchmark helper */
+#define xpadneo_benchmark_start(name) \
+do { \
+	unsigned long __##name_jiffies = jiffies; \
+	pr_info("xpadneo " #name " start\n")
+#define xpadneo_benchmark_stop(name) \
+	pr_info("xpadneo " #name " took %ldms\n", (jiffies - __##name_jiffies) * 1000 / HZ); \
+} while (0)
+
 /* button aliases */
 #define BTN_SHARE KEY_RECORD
-#define BTN_XBOX  KEY_HOMEPAGE
+#define BTN_XBOX  KEY_MODE
 
 /* module parameter "trigger_rumble_mode" */
 #define PARAM_TRIGGER_RUMBLE_PRESSURE    0
 #define PARAM_TRIGGER_RUMBLE_DIRECTIONAL 1
 #define PARAM_TRIGGER_RUMBLE_DISABLE     2
 
-/* module parameter "quriks" */
+/* module parameter "quirks" */
 #define XPADNEO_QUIRK_NO_PULSE          1
 #define XPADNEO_QUIRK_NO_TRIGGER_RUMBLE 2
 #define XPADNEO_QUIRK_NO_MOTOR_MASK     4
@@ -107,9 +116,10 @@ struct xpadneo_devdata {
 
 	/* logical device interfaces */
 	struct hid_device *hdev;
-	struct input_dev *idev;
+	struct input_dev *consumer, *gamepad, *keyboard;
 
 	/* quirk flags */
+	unsigned int original_rsize;
 	u32 quirks;
 
 	/* profile switching */
