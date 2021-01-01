@@ -17,12 +17,11 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Florian Dollinger <dollinger.florian@gmx.de>");
 MODULE_AUTHOR("Kai Krakow <kai@kaishome.de>");
 MODULE_DESCRIPTION("Linux kernel driver for Xbox ONE S+ gamepads (BT), incl. FF");
-MODULE_VERSION(DRV_VER);
+MODULE_VERSION(XPADNEO_VERSION);
 
 static u8 param_trigger_rumble_mode = 0;
 module_param_named(trigger_rumble_mode, param_trigger_rumble_mode, byte, 0644);
-MODULE_PARM_DESC(trigger_rumble_mode,
-		 "(u8) Trigger rumble mode. 0: pressure, 1: directional (deprecated), 2: disable.");
+MODULE_PARM_DESC(trigger_rumble_mode, "(u8) Trigger rumble mode. 0: pressure, 2: disable.");
 
 static u8 param_rumble_attenuation[2];
 module_param_array_named(rumble_attenuation, param_rumble_attenuation, byte, NULL, 0644);
@@ -53,15 +52,15 @@ static struct {
 } param_quirks;
 module_param_array_named(quirks, param_quirks.args, charp, &param_quirks.nargs, 0644);
 MODULE_PARM_DESC(quirks,
-		 "(string) Override device quirks, specify as: \"MAC1:quirks1[,...16]\""
+		 "(string) Override or change device quirks, specify as: \"MAC1{:,+,-}quirks1[,...16]\""
 		 ", MAC format = 11:22:33:44:55:66"
 		 ", no pulse parameters = " __stringify(XPADNEO_QUIRK_NO_PULSE)
 		 ", no trigger rumble = " __stringify(XPADNEO_QUIRK_NO_TRIGGER_RUMBLE)
 		 ", no motor masking = " __stringify(XPADNEO_QUIRK_NO_MOTOR_MASK)
-		 ", hardware profile switch = " __stringify(XPADNEO_QUIRK_USE_HW_PROFILES)
 		 ", use Linux button mappings = " __stringify(XPADNEO_QUIRK_LINUX_BUTTONS)
 		 ", use Nintendo mappings = " __stringify(XPADNEO_QUIRK_NINTENDO)
-		 ", use Share button mappings = " __stringify(XPADNEO_QUIRK_SHARE_BUTTON));
+		 ", use Share button mappings = " __stringify(XPADNEO_QUIRK_SHARE_BUTTON)
+		 ", reversed motor masking = " __stringify(XPADNEO_QUIRK_REVERSE_MASK));
 
 static DEFINE_IDA(xpadneo_device_id_allocator);
 
@@ -87,9 +86,12 @@ struct quirk {
 };
 
 static const struct quirk xpadneo_quirks[] = {
+	DEVICE_OUI_QUIRK("98:B6:EA",
+			 XPADNEO_QUIRK_NO_PULSE | XPADNEO_QUIRK_NO_TRIGGER_RUMBLE |
+			 XPADNEO_QUIRK_REVERSE_MASK),
 	DEVICE_OUI_QUIRK("E4:17:D8",
 			 XPADNEO_QUIRK_NO_PULSE | XPADNEO_QUIRK_NO_TRIGGER_RUMBLE |
-			 XPADNEO_QUIRK_NO_MOTOR_MASK | XPADNEO_QUIRK_NINTENDO),
+			 XPADNEO_QUIRK_NO_MOTOR_MASK),
 };
 
 struct usage_map {
@@ -261,6 +263,10 @@ static void xpadneo_ff_worker(struct work_struct *work)
 	if (unlikely(xdata->quirks & XPADNEO_QUIRK_NO_MOTOR_MASK))
 		r->ff.enable = 0;
 
+	/* reverse the bits for trigger and main motors */
+	if (unlikely(xdata->quirks & XPADNEO_QUIRK_REVERSE_MASK))
+		r->ff.enable = SWAP_BITS(SWAP_BITS(r->ff.enable, 1, 2), 0, 3);
+
 	ret = hid_hw_output_report(hdev, (__u8 *) r, sizeof(*r));
 	if (ret < 0)
 		hid_warn(hdev, "failed to send FF report: %d\n", ret);
@@ -269,18 +275,10 @@ static void xpadneo_ff_worker(struct work_struct *work)
 #define update_magnitude(m, v) m = (v) > 0 ? max(m, v) : 0
 static int xpadneo_ff_play(struct input_dev *dev, void *data, struct ff_effect *effect)
 {
-	enum {
-		DIRECTION_DOWN = 0x0000UL,
-		DIRECTION_LEFT = 0x4000UL,
-		DIRECTION_UP = 0x8000UL,
-		DIRECTION_RIGHT = 0xC000UL,
-		QUARTER = DIRECTION_LEFT,
-	};
-
 	unsigned long flags, ff_run_at, ff_throttle_until;
 	long delay_work;
 	int fraction_TL, fraction_TR, fraction_MAIN, percent_TRIGGERS, percent_MAIN;
-	s32 weak, strong, direction, max_main;
+	s32 weak, strong, max_main;
 
 	struct hid_device *hdev = input_get_drvdata(dev);
 	struct xpadneo_devdata *xdata = hid_get_drvdata(hdev);
@@ -301,70 +299,16 @@ static int xpadneo_ff_play(struct input_dev *dev, void *data, struct ff_effect *
 	percent_TRIGGERS = percent_TRIGGERS * percent_MAIN / 100;
 
 	switch (param_trigger_rumble_mode) {
-	case PARAM_TRIGGER_RUMBLE_DIRECTIONAL:
-		/*
-		 * scale the main rumble lineary within each half of the cirlce,
-		 * so we can completely turn off the main rumble while still doing
-		 * trigger rumble alone
-		 */
-		direction = effect->direction;
-		if (direction <= DIRECTION_UP) {
-			/* scale the main rumbling between 0x0000..0x8000 (100%..0%) */
-			fraction_MAIN = ((DIRECTION_UP - direction) * percent_MAIN) / DIRECTION_UP;
-		} else {
-			/* scale the main rumbling between 0x8000..0xffff (0%..100%) */
-			fraction_MAIN = ((direction - DIRECTION_UP) * percent_MAIN) / DIRECTION_UP;
-		}
-
-		/*
-		 * scale the trigger rumble lineary within each quarter:
-		 *        _ _
-		 * LT = /     \
-		 * RT = _ / \ _
-		 *      1 2 3 4
-		 *
-		 * This gives us 4 different modes of operation (with smooth transitions)
-		 * to get a mostly somewhat independent control over each motor:
-		 *
-		 *                DOWN .. LEFT ..  UP  .. RGHT .. DOWN
-		 * left rumble  =   0% .. 100% .. 100% ..   0% ..   0%
-		 * right rumble =   0% ..   0% .. 100% .. 100% ..   0%
-		 * main rumble  = 100% ..  50% ..   0% ..  50% .. 100%
-		 *
-		 * For completely independent control, we'd need a sphere instead of a
-		 * circle but we only have one direction. We could decouple the
-		 * direction from the main rumble but that seems to be outside the spec
-		 * of the rumble protocol (direction without any magnitude should do
-		 * nothing).
-		 */
-		if (direction <= DIRECTION_LEFT) {
-			/* scale the left trigger between 0x0000..0x4000 (0%..100%) */
-			fraction_TL = (direction * percent_TRIGGERS) / QUARTER;
-			fraction_TR = 0;
-		} else if (direction <= DIRECTION_UP) {
-			/* scale the right trigger between 0x4000..0x8000 (0%..100%) */
-			fraction_TL = 100;
-			fraction_TR = ((direction - DIRECTION_LEFT) * percent_TRIGGERS) / QUARTER;
-		} else if (direction <= DIRECTION_RIGHT) {
-			/* scale the right trigger between 0x8000..0xC000 (100%..0%) */
-			fraction_TL = 100;
-			fraction_TR = ((DIRECTION_RIGHT - direction) * percent_TRIGGERS) / QUARTER;
-		} else {
-			/* scale the left trigger between 0xC000...0xFFFF (0..100%) */
-			fraction_TL =
-			    100 - ((direction - DIRECTION_RIGHT) * percent_TRIGGERS) / QUARTER;
-			fraction_TR = 0;
-		}
-		break;
-	case PARAM_TRIGGER_RUMBLE_PRESSURE:
-		fraction_MAIN = percent_MAIN;
-		fraction_TL = (xdata->last_abs_z * percent_TRIGGERS + 511) / 1023;
-		fraction_TR = (xdata->last_abs_rz * percent_TRIGGERS + 511) / 1023;
-		break;
-	default:
+	case PARAM_TRIGGER_RUMBLE_DISABLE:
 		fraction_MAIN = percent_MAIN;
 		fraction_TL = 0;
 		fraction_TR = 0;
+		break;
+	case PARAM_TRIGGER_RUMBLE_PRESSURE:
+	default:
+		fraction_MAIN = percent_MAIN;
+		fraction_TL = (xdata->last_abs_z * percent_TRIGGERS + 511) / 1023;
+		fraction_TR = (xdata->last_abs_rz * percent_TRIGGERS + 511) / 1023;
 		break;
 	}
 
@@ -446,60 +390,59 @@ static void xpadneo_welcome_rumble(struct hid_device *hdev)
 
 	if (xdata->quirks & XPADNEO_QUIRK_NO_MOTOR_MASK)
 		ff_pck.ff.magnitude_weak = 40;
+	else if (xdata->quirks & XPADNEO_QUIRK_REVERSE_MASK)
+		ff_pck.ff.enable = FF_RUMBLE_LEFT;
 	else
 		ff_pck.ff.enable = FF_RUMBLE_WEAK;
 	hid_hw_output_report(hdev, (u8 *)&ff_pck, sizeof(ff_pck));
 	mdelay(300);
-	if (xdata->quirks & XPADNEO_QUIRK_NO_MOTOR_MASK)
-		ff_pck.ff.magnitude_weak = 0;
-	else
-		ff_pck.ff.enable = 0;
 	if (xdata->quirks & XPADNEO_QUIRK_NO_PULSE) {
 		u8 save = ff_pck.ff.magnitude_weak;
+		ff_pck.ff.magnitude_weak = 0;
 		hid_hw_output_report(hdev, (u8 *)&ff_pck, sizeof(ff_pck));
 		ff_pck.ff.magnitude_weak = save;
 	}
+	ff_pck.ff.enable = 0;
 	mdelay(30);
 
 	if (xdata->quirks & XPADNEO_QUIRK_NO_MOTOR_MASK)
 		ff_pck.ff.magnitude_strong = 20;
+	else if (xdata->quirks & XPADNEO_QUIRK_REVERSE_MASK)
+		ff_pck.ff.enable = FF_RUMBLE_RIGHT;
 	else
 		ff_pck.ff.enable = FF_RUMBLE_STRONG;
 	hid_hw_output_report(hdev, (u8 *)&ff_pck, sizeof(ff_pck));
 	mdelay(300);
-	if (xdata->quirks & XPADNEO_QUIRK_NO_MOTOR_MASK)
-		ff_pck.ff.magnitude_strong = 0;
-	else
-		ff_pck.ff.enable = 0;
 	if (xdata->quirks & XPADNEO_QUIRK_NO_PULSE) {
 		u8 save = ff_pck.ff.magnitude_strong;
+		ff_pck.ff.magnitude_strong = 0;
 		hid_hw_output_report(hdev, (u8 *)&ff_pck, sizeof(ff_pck));
 		ff_pck.ff.magnitude_strong = save;
 	}
+	ff_pck.ff.enable = 0;
 	mdelay(30);
 
 	if ((xdata->quirks & XPADNEO_QUIRK_NO_TRIGGER_RUMBLE) == 0) {
 		if (xdata->quirks & XPADNEO_QUIRK_NO_MOTOR_MASK) {
 			ff_pck.ff.magnitude_left = 10;
 			ff_pck.ff.magnitude_right = 10;
+		} else if (xdata->quirks & XPADNEO_QUIRK_REVERSE_MASK) {
+			ff_pck.ff.enable = FF_RUMBLE_MAIN;
 		} else {
 			ff_pck.ff.enable = FF_RUMBLE_TRIGGERS;
 		}
 		hid_hw_output_report(hdev, (u8 *)&ff_pck, sizeof(ff_pck));
 		mdelay(300);
-		if (xdata->quirks & XPADNEO_QUIRK_NO_MOTOR_MASK) {
-			ff_pck.ff.magnitude_left = 0;
-			ff_pck.ff.magnitude_right = 0;
-		} else {
-			ff_pck.ff.enable = 0;
-		}
 		if (xdata->quirks & XPADNEO_QUIRK_NO_PULSE) {
 			u8 lsave = ff_pck.ff.magnitude_left;
 			u8 rsave = ff_pck.ff.magnitude_right;
+			ff_pck.ff.magnitude_left = 0;
+			ff_pck.ff.magnitude_right = 0;
 			hid_hw_output_report(hdev, (u8 *)&ff_pck, sizeof(ff_pck));
 			ff_pck.ff.magnitude_left = lsave;
 			ff_pck.ff.magnitude_right = rsave;
 		}
+		ff_pck.ff.enable = 0;
 		mdelay(30);
 	}
 }
@@ -507,7 +450,7 @@ static void xpadneo_welcome_rumble(struct hid_device *hdev)
 static int xpadneo_init_ff(struct hid_device *hdev)
 {
 	struct xpadneo_devdata *xdata = hid_get_drvdata(hdev);
-	struct input_dev *idev = xdata->idev;
+	struct input_dev *gamepad = xdata->gamepad;
 
 	INIT_DELAYED_WORK(&xdata->ff_worker, xpadneo_ff_worker);
 	xdata->output_report_dmabuf = devm_kzalloc(&hdev->dev,
@@ -518,14 +461,17 @@ static int xpadneo_init_ff(struct hid_device *hdev)
 	if (param_trigger_rumble_mode == PARAM_TRIGGER_RUMBLE_DISABLE)
 		xdata->quirks |= XPADNEO_QUIRK_NO_TRIGGER_RUMBLE;
 
-	if (param_ff_connect_notify)
+	if (param_ff_connect_notify) {
+		xpadneo_benchmark_start(xpadneo_welcome_rumble);
 		xpadneo_welcome_rumble(hdev);
+		xpadneo_benchmark_stop(xpadneo_welcome_rumble);
+	}
 
 	/* initialize our rumble command throttle */
 	xdata->ff_throttle_until = XPADNEO_RUMBLE_THROTTLE_JIFFIES;
 
-	input_set_capability(idev, EV_FF, FF_RUMBLE);
-	return input_ff_create_memless(idev, NULL, xpadneo_ff_play);
+	input_set_capability(gamepad, EV_FF, FF_RUMBLE);
+	return input_ff_create_memless(gamepad, NULL, xpadneo_ff_play);
 }
 
 #define XPADNEO_PSY_ONLINE(data)     ((data&0x80)>0)
@@ -675,10 +621,6 @@ static int xpadneo_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 {
 	int i = 0;
 
-	/* XBE2 reports a full keyboard, which we don't need */
-	if ((usage->hid & HID_USAGE_PAGE) == HID_UP_KEYBOARD)
-		return MAP_IGNORE;
-
 	if (usage->hid == HID_DC_BATTERYSTRENGTH) {
 		struct xpadneo_devdata *xdata = hid_get_drvdata(hdev);
 
@@ -759,6 +701,20 @@ static u8 *xpadneo_report_fixup(struct hid_device *hdev, u8 *rdesc, unsigned int
 	}
 
 	return rdesc;
+}
+
+static void xpadneo_toggle_mouse(struct xpadneo_devdata *xdata)
+{
+	if (xdata->mouse_mode) {
+		xdata->mouse_mode = false;
+		hid_info(xdata->hdev, "mouse mode disabled\n");
+	} else {
+		xdata->mouse_mode = true;
+		hid_info(xdata->hdev, "mouse mode enabled\n");
+	}
+
+	/* Indicate that a request was made */
+	xdata->profile_switched = true;
 }
 
 static void xpadneo_switch_profile(struct xpadneo_devdata *xdata, const u8 profile,
@@ -871,7 +827,26 @@ static int xpadneo_input_configured(struct hid_device *hdev, struct hid_input *h
 	struct xpadneo_devdata *xdata = hid_get_drvdata(hdev);
 	int deadzone = 3072, abs_min = 0, abs_max = 65535;
 
-	xdata->idev = hi->input;
+	switch (hi->application) {
+	case HID_GD_GAMEPAD:
+		hid_info(hdev, "gamepad detected\n");
+		xdata->gamepad = hi->input;
+		break;
+	case HID_GD_KEYBOARD:
+		hid_info(hdev, "keyboard detected\n");
+		xdata->keyboard = hi->input;
+		return 0;
+	case HID_CP_CONSUMER_CONTROL:
+		hid_info(hdev, "consumer control detected\n");
+		xdata->consumer = hi->input;
+		return 0;
+	case 0xFF000005:
+		hid_info(hdev, "mapping profiles detected\n");
+		xdata->quirks |= XPADNEO_QUIRK_USE_HW_PROFILES;
+		return 0;
+	default:
+		hid_warn(hdev, "unhandled input application 0x%x\n", hi->application);
+	}
 
 	if (param_disable_deadzones) {
 		hid_warn(hdev, "disabling dead zones\n");
@@ -884,25 +859,25 @@ static int xpadneo_input_configured(struct hid_device *hdev, struct hid_input *h
 		abs_max = 32767;
 	}
 
-	input_set_abs_params(xdata->idev, ABS_X, abs_min, abs_max, 32, deadzone);
-	input_set_abs_params(xdata->idev, ABS_Y, abs_min, abs_max, 32, deadzone);
-	input_set_abs_params(xdata->idev, ABS_RX, abs_min, abs_max, 32, deadzone);
-	input_set_abs_params(xdata->idev, ABS_RY, abs_min, abs_max, 32, deadzone);
+	input_set_abs_params(xdata->gamepad, ABS_X, abs_min, abs_max, 32, deadzone);
+	input_set_abs_params(xdata->gamepad, ABS_Y, abs_min, abs_max, 32, deadzone);
+	input_set_abs_params(xdata->gamepad, ABS_RX, abs_min, abs_max, 32, deadzone);
+	input_set_abs_params(xdata->gamepad, ABS_RY, abs_min, abs_max, 32, deadzone);
 
-	input_set_abs_params(xdata->idev, ABS_Z, 0, 1023, 4, 0);
-	input_set_abs_params(xdata->idev, ABS_RZ, 0, 1023, 4, 0);
+	input_set_abs_params(xdata->gamepad, ABS_Z, 0, 1023, 4, 0);
+	input_set_abs_params(xdata->gamepad, ABS_RZ, 0, 1023, 4, 0);
 
 	/* combine triggers to form a rudder, use ABS_MISC to order after dpad */
-	input_set_abs_params(xdata->idev, ABS_MISC, -1023, 1023, 3, 63);
+	input_set_abs_params(xdata->gamepad, ABS_MISC, -1023, 1023, 3, 63);
 
-	/* do not report the consumer control buttons as part of the gamepad */
-	__clear_bit(BTN_SHARE, xdata->idev->keybit);
+	/* do not report the keyboard buttons as part of the gamepad */
+	__clear_bit(BTN_SHARE, xdata->gamepad->keybit);
 
 	/* add paddles as part of the gamepad */
-	__set_bit(BTN_PADDLES(0), xdata->idev->keybit);
-	__set_bit(BTN_PADDLES(1), xdata->idev->keybit);
-	__set_bit(BTN_PADDLES(2), xdata->idev->keybit);
-	__set_bit(BTN_PADDLES(3), xdata->idev->keybit);
+	__set_bit(BTN_PADDLES(0), xdata->gamepad->keybit);
+	__set_bit(BTN_PADDLES(1), xdata->gamepad->keybit);
+	__set_bit(BTN_PADDLES(2), xdata->gamepad->keybit);
+	__set_bit(BTN_PADDLES(3), xdata->gamepad->keybit);
 
 	return 0;
 }
@@ -911,15 +886,16 @@ static int xpadneo_event(struct hid_device *hdev, struct hid_field *field,
 			 struct hid_usage *usage, __s32 value)
 {
 	struct xpadneo_devdata *xdata = hid_get_drvdata(hdev);
-	struct input_dev *idev = xdata->idev;
+	struct input_dev *gamepad = xdata->gamepad;
+	struct input_dev *keyboard = xdata->keyboard;
 
 	if ((usage->type == EV_KEY) && (usage->code == BTN_PADDLES(0))) {
-		if (xdata->profile == 0) {
+		if (gamepad && xdata->profile == 0) {
 			/* report the paddles individually */
-			input_report_key(idev, BTN_PADDLES(0), value & 1 ? 1 : 0);
-			input_report_key(idev, BTN_PADDLES(1), value & 2 ? 1 : 0);
-			input_report_key(idev, BTN_PADDLES(2), value & 4 ? 1 : 0);
-			input_report_key(idev, BTN_PADDLES(3), value & 8 ? 1 : 0);
+			input_report_key(gamepad, BTN_PADDLES(0), value & 1 ? 1 : 0);
+			input_report_key(gamepad, BTN_PADDLES(1), value & 2 ? 1 : 0);
+			input_report_key(gamepad, BTN_PADDLES(2), value & 4 ? 1 : 0);
+			input_report_key(gamepad, BTN_PADDLES(3), value & 8 ? 1 : 0);
 		}
 		goto stop_processing;
 	} else if (usage->type == EV_ABS) {
@@ -930,7 +906,7 @@ static int xpadneo_event(struct hid_device *hdev, struct hid_field *field,
 		case ABS_RY:
 			/* Linux Gamepad Specification */
 			if (param_gamepad_compliance) {
-				input_report_abs(idev, usage->code, value - 32768);
+				input_report_abs(gamepad, usage->code, value - 32768);
 				/* no need to sync here */
 				goto stop_processing;
 			}
@@ -958,13 +934,20 @@ static int xpadneo_event(struct hid_device *hdev, struct hid_field *field,
 				xdata->profile_switched = false;
 			} else {
 				/* replay cached event */
-				input_report_key(idev, BTN_XBOX, 1);
-				input_sync(idev);
+				input_report_key(gamepad, BTN_XBOX, 1);
+				input_sync(gamepad);
 				/* synthesize the release to remove the scan code */
-				input_report_key(idev, BTN_XBOX, 0);
-				input_sync(idev);
+				input_report_key(gamepad, BTN_XBOX, 0);
+				input_sync(gamepad);
 			}
 		}
+		goto stop_processing;
+	} else if ((usage->type == EV_KEY) && (usage->code == BTN_SHARE)) {
+		/* move the Share button to the keyboard device */
+		if (!keyboard)
+			goto keyboard_missing;
+		input_report_key(keyboard, BTN_SHARE, value);
+		input_sync(keyboard);
 		goto stop_processing;
 	} else if (xdata->xbox_button_down && (usage->type == EV_KEY)) {
 		if (!(xdata->quirks & XPADNEO_QUIRK_USE_HW_PROFILES)) {
@@ -985,6 +968,10 @@ static int xpadneo_event(struct hid_device *hdev, struct hid_field *field,
 				if (value == 1)
 					xpadneo_switch_profile(xdata, 3, true);
 				goto stop_processing;
+			case BTN_SELECT:
+				if (value == 1)
+					xpadneo_toggle_mouse(xdata);
+				goto stop_processing;
 			}
 		}
 	}
@@ -995,9 +982,15 @@ static int xpadneo_event(struct hid_device *hdev, struct hid_field *field,
 combine_z_axes:
 	if (++xdata->count_abs_z_rz == 2) {
 		xdata->count_abs_z_rz = 0;
-		input_report_abs(idev, ABS_MISC, xdata->last_abs_rz - xdata->last_abs_z);
+		input_report_abs(gamepad, ABS_MISC, xdata->last_abs_rz - xdata->last_abs_z);
 	}
 	return 0;
+
+keyboard_missing:
+	if ((xdata->missing_reported && XPADNEO_MISSING_KEYBOARD) == 0) {
+		xdata->missing_reported |= XPADNEO_MISSING_KEYBOARD;
+		hid_err(hdev, "keyboard not detected\n");
+	}
 
 stop_processing:
 	return 1;
@@ -1008,16 +1001,24 @@ static int xpadneo_init_hw(struct hid_device *hdev)
 	int i, ret;
 	struct xpadneo_devdata *xdata = hid_get_drvdata(hdev);
 
+	if (!xdata->gamepad) {
+		if ((xdata->missing_reported && XPADNEO_MISSING_GAMEPAD) == 0) {
+			xdata->missing_reported |= XPADNEO_MISSING_GAMEPAD;
+			hid_err(hdev, "gamepad not detected\n");
+		}
+		return -EINVAL;
+	}
+
 	xdata->battery.name =
-	    kasprintf(GFP_KERNEL, "%s [%s]", xdata->idev->name, xdata->idev->uniq);
+	    kasprintf(GFP_KERNEL, "%s [%s]", xdata->gamepad->name, xdata->gamepad->uniq);
 	if (!xdata->battery.name) {
 		ret = -ENOMEM;
 		goto err_free_name;
 	}
 
 	xdata->battery.name_pnc =
-	    kasprintf(GFP_KERNEL, "%s [%s] Play'n Charge Kit", xdata->idev->name,
-		      xdata->idev->uniq);
+	    kasprintf(GFP_KERNEL, "%s [%s] Play'n Charge Kit", xdata->gamepad->name,
+		      xdata->gamepad->uniq);
 	if (!xdata->battery.name_pnc) {
 		ret = -ENOMEM;
 		goto err_free_name;
@@ -1026,27 +1027,38 @@ static int xpadneo_init_hw(struct hid_device *hdev)
 	for (i = 0; i < ARRAY_SIZE(xpadneo_quirks); i++) {
 		const struct quirk *q = &xpadneo_quirks[i];
 
-		if (q->name_match && (strncmp(q->name_match, xdata->idev->name, q->name_len) == 0))
+		if (q->name_match
+		    && (strncmp(q->name_match, xdata->gamepad->name, q->name_len) == 0))
 			xdata->quirks |= q->flags;
 
-		if (q->oui_match && (strncasecmp(q->oui_match, xdata->idev->uniq, 8) == 0))
+		if (q->oui_match && (strncasecmp(q->oui_match, xdata->gamepad->uniq, 8) == 0))
 			xdata->quirks |= q->flags;
 	}
 
 	kernel_param_lock(THIS_MODULE);
 	for (i = 0; i < param_quirks.nargs; i++) {
-		int offset = strnlen(xdata->idev->uniq, 18);
-		if ((strncasecmp(xdata->idev->uniq, param_quirks.args[i], offset) == 0)
-		    && (param_quirks.args[i][offset] == ':')) {
+		int offset = strnlen(xdata->gamepad->uniq, 18);
+		if ((strncasecmp(xdata->gamepad->uniq, param_quirks.args[i], offset) == 0)
+		    && ((param_quirks.args[i][offset] == ':')
+			|| (param_quirks.args[i][offset] == '+')
+			|| (param_quirks.args[i][offset] == '-'))) {
 			char *quirks_arg = &param_quirks.args[i][offset + 1];
 			u32 quirks = 0;
 			ret = kstrtou32(quirks_arg, 0, &quirks);
 			if (ret) {
 				hid_err(hdev, "quirks override invalid: %s\n", quirks_arg);
 				goto err_free_name;
-			} else {
-				hid_info(hdev, "quirks override: %s\n", xdata->idev->uniq);
+			} else if (param_quirks.args[i][offset] == ':') {
+				hid_info(hdev, "quirks override: %s\n", xdata->gamepad->uniq);
 				xdata->quirks = quirks;
+			} else if (param_quirks.args[i][offset] == '-') {
+				hid_info(hdev, "quirks removed: %s flag 0x%08X\n",
+					 xdata->gamepad->uniq, quirks);
+				xdata->quirks &= ~quirks;
+			} else {
+				hid_info(hdev, "quirks added: %s flags 0x%08X\n",
+					 xdata->gamepad->uniq, quirks);
+				xdata->quirks |= quirks;
 			}
 			break;
 		}
@@ -1081,6 +1093,7 @@ static int xpadneo_probe(struct hid_device *hdev, const struct hid_device_id *id
 	xdata->quirks = id->driver_data;
 
 	xdata->hdev = hdev;
+	hdev->quirks |= HID_QUIRK_INPUT_PER_APP;
 	hid_set_drvdata(hdev, xdata);
 
 	if (hdev->version == 0x00000903)
@@ -1153,6 +1166,14 @@ static int xpadneo_probe(struct hid_device *hdev, const struct hid_device_id *id
 		return ret;
 	}
 
+	ret = xpadneo_init_consumer(xdata);
+	if (ret)
+		return ret;
+
+	ret = xpadneo_init_keyboard(xdata);
+	if (ret)
+		return ret;
+
 	ret = xpadneo_init_hw(hdev);
 	if (ret) {
 		hid_err(hdev, "hw init failed: %d\n", ret);
@@ -1219,10 +1240,9 @@ static const struct hid_device_id xpadneo_devices[] = {
 	 .driver_data = XPADNEO_QUIRK_SHARE_BUTTON },
 
 	/* XBOX ONE Elite Series 2 */
-	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_MICROSOFT, 0x0B05),
-	 .driver_data = XPADNEO_QUIRK_USE_HW_PROFILES },
+	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_MICROSOFT, 0x0B05) },
 	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_MICROSOFT, 0x0B22),
-	 .driver_data = XPADNEO_QUIRK_USE_HW_PROFILES | XPADNEO_QUIRK_SHARE_BUTTON },
+	 .driver_data = XPADNEO_QUIRK_SHARE_BUTTON },
 
 	/* XBOX Series X|S / Xbox Wireless Controller (BLE) */
 	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_MICROSOFT, 0x0B13),
@@ -1252,7 +1272,7 @@ static int __init xpadneo_init(void)
 	dbg_hid("xpadneo:%s\n", __func__);
 
 	if (param_trigger_rumble_mode == 1)
-		pr_warn("hid-xpadneo trigger_rumble_mode=1 is deprecated\n");
+		pr_warn("hid-xpadneo trigger_rumble_mode=1 is unknown, defaulting to 0\n");
 
 	xpadneo_rumble_wq = alloc_ordered_workqueue("xpadneo/rumbled", WQ_HIGHPRI);
 	if (xpadneo_rumble_wq) {
