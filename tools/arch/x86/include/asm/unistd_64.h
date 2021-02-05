@@ -17,3 +17,15 @@
 #ifndef __NR_setns
 #define __NR_setns 308
 #endif
+
+#ifndef __NR_futex_wait
+# define __NR_futex_wait 441
+#endif
+
+#ifndef __NR_futex_wake
+# define __NR_futex_wake 442
+#endif
+
+#ifndef __NR_futex_requeue
+# define __NR_futex_requeue 444
+#endif
