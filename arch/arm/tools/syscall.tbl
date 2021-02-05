@@ -457,3 +457,4 @@
 441	common	futex_wait			sys_futex_wait
 442	common	futex_wake			sys_futex_wake
 443	common  futex_waitv                     sys_futex_waitv
+444	common	futex_requeue			sys_futex_requeue
