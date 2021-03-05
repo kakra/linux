@@ -150,4 +150,254 @@ TEST(semaphore_state)
 	close(fd);
 }
 
+TEST(mutex_state)
+{
+	struct winesync_wait_args wait_args;
+	struct winesync_mutex_args mutex_args;
+	struct timespec timeout;
+	__u32 owner;
+	int fd, ret;
+
+	clock_gettime(CLOCK_MONOTONIC, &timeout);
+
+	fd = open("/dev/winesync", O_CLOEXEC | O_RDONLY);
+	ASSERT_LE(0, fd);
+
+	mutex_args.owner = 123;
+	mutex_args.count = 0;
+	ret = ioctl(fd, WINESYNC_IOC_CREATE_MUTEX, &mutex_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EINVAL, errno);
+
+	mutex_args.owner = 0;
+	mutex_args.count = 2;
+	ret = ioctl(fd, WINESYNC_IOC_CREATE_MUTEX, &mutex_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EINVAL, errno);
+
+	mutex_args.owner = 123;
+	mutex_args.count = 2;
+	mutex_args.mutex = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_CREATE_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_NE(0xdeadbeef, mutex_args.mutex);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(2, mutex_args.count);
+	EXPECT_EQ(123, mutex_args.owner);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0;
+	ret = ioctl(fd, WINESYNC_IOC_PUT_MUTEX, &mutex_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EINVAL, errno);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 456;
+	ret = ioctl(fd, WINESYNC_IOC_PUT_MUTEX, &mutex_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EPERM, errno);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(2, mutex_args.count);
+	EXPECT_EQ(123, mutex_args.owner);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 123;
+	ret = ioctl(fd, WINESYNC_IOC_PUT_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(2, mutex_args.count);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(1, mutex_args.count);
+	EXPECT_EQ(123, mutex_args.owner);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 123;
+	ret = ioctl(fd, WINESYNC_IOC_PUT_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(1, mutex_args.count);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, mutex_args.count);
+	EXPECT_EQ(0, mutex_args.owner);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 123;
+	ret = ioctl(fd, WINESYNC_IOC_PUT_MUTEX, &mutex_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EPERM, errno);
+
+	wait_args.timeout = (uintptr_t)&timeout;
+	wait_args.objs = (uintptr_t)&mutex_args.mutex;
+	wait_args.count = 1;
+	wait_args.owner = 456;
+	wait_args.index = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_WAIT_ANY, &wait_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, wait_args.index);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(1, mutex_args.count);
+	EXPECT_EQ(456, mutex_args.owner);
+
+	wait_args.owner = 456;
+	wait_args.index = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_WAIT_ANY, &wait_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, wait_args.index);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(2, mutex_args.count);
+	EXPECT_EQ(456, mutex_args.owner);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 456;
+	ret = ioctl(fd, WINESYNC_IOC_PUT_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(2, mutex_args.count);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(1, mutex_args.count);
+	EXPECT_EQ(456, mutex_args.owner);
+
+	wait_args.owner = 123;
+	wait_args.index = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_WAIT_ANY, &wait_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(ETIMEDOUT, errno);
+
+	owner = 0;
+	ret = ioctl(fd, WINESYNC_IOC_KILL_OWNER, &owner);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EINVAL, errno);
+
+	owner = 123;
+	ret = ioctl(fd, WINESYNC_IOC_KILL_OWNER, &owner);
+	EXPECT_EQ(0, ret);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(1, mutex_args.count);
+	EXPECT_EQ(456, mutex_args.owner);
+
+	owner = 456;
+	ret = ioctl(fd, WINESYNC_IOC_KILL_OWNER, &owner);
+	EXPECT_EQ(0, ret);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EOWNERDEAD, errno);
+	EXPECT_EQ(0, mutex_args.count);
+	EXPECT_EQ(0, mutex_args.owner);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EOWNERDEAD, errno);
+	EXPECT_EQ(0, mutex_args.count);
+	EXPECT_EQ(0, mutex_args.owner);
+
+	wait_args.owner = 123;
+	wait_args.index = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_WAIT_ANY, &wait_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EOWNERDEAD, errno);
+	EXPECT_EQ(0, wait_args.index);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(1, mutex_args.count);
+	EXPECT_EQ(123, mutex_args.owner);
+
+	owner = 123;
+	ret = ioctl(fd, WINESYNC_IOC_KILL_OWNER, &owner);
+	EXPECT_EQ(0, ret);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EOWNERDEAD, errno);
+	EXPECT_EQ(0, mutex_args.count);
+	EXPECT_EQ(0, mutex_args.owner);
+
+	wait_args.owner = 123;
+	wait_args.index = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_WAIT_ANY, &wait_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EOWNERDEAD, errno);
+	EXPECT_EQ(0, wait_args.index);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(1, mutex_args.count);
+	EXPECT_EQ(123, mutex_args.owner);
+
+	ret = ioctl(fd, WINESYNC_IOC_DELETE, &mutex_args.mutex);
+	EXPECT_EQ(0, ret);
+
+	mutex_args.owner = 0;
+	mutex_args.count = 0;
+	mutex_args.mutex = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_CREATE_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_NE(0xdeadbeef, mutex_args.mutex);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, mutex_args.count);
+	EXPECT_EQ(0, mutex_args.owner);
+
+	wait_args.owner = 123;
+	wait_args.index = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_WAIT_ANY, &wait_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, wait_args.index);
+
+	mutex_args.count = 0xdeadbeef;
+	mutex_args.owner = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(1, mutex_args.count);
+	EXPECT_EQ(123, mutex_args.owner);
+
+	ret = ioctl(fd, WINESYNC_IOC_DELETE, &mutex_args.mutex);
+	EXPECT_EQ(0, ret);
+
+	close(fd);
+}
+
 TEST_HARNESS_MAIN
