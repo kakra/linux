@@ -60,6 +60,7 @@ structures used in ioctl calls::
    	__u32 sem;
    	__u32 count;
    	__u32 max;
+   	__u32 flags;
    };
 
    struct winesync_mutex_args {
@@ -92,6 +93,13 @@ The ioctls are as follows:
 
     ``count`` and ``max`` are input-only arguments, denoting the
     initial and maximum count of the semaphore.
+
+    ``flags`` is an input-only argument, which specifies additional
+    flags modifying the behaviour of the semaphore. There is only one
+    flag defined, ``WINESYNC_SEM_GETONWAIT``. If present, wait
+    operations on this semaphore will acquire it, decrementing its
+    count by one; otherwise, wait operations will not affect the
+    semaphore's state.
 
     ``sem`` is an output-only argument, which will be filled with the
     allocated identifier if successful.
@@ -138,7 +146,7 @@ The ioctls are as follows:
     ``count`` contains on input the count to add to the semaphore, and
     on output is filled with its previous count.
 
-    ``max`` is not used.
+    ``max`` and ``flags`` are not used.
 
   The operation is atomic and totally ordered with respect to other
   operations on the same semaphore. If adding ``count`` to the
@@ -183,6 +191,9 @@ The ioctls are as follows:
 
     ``count`` and ``max`` are output-only arguments, which will be
     filled with the current and maximum count of the given semaphore.
+
+    ``flags`` is an output-only argument, which will be filled with
+    the flags used to create the semaphore.
 
   The operation is atomic and totally ordered with respect to other
   operations on the same semaphore.
@@ -254,19 +265,26 @@ The ioctls are as follows:
   case the ioctl fails with ``ETIMEDOUT``. The function only acquires
   one object, even if multiple objects are signaled.
 
-  A semaphore is considered to be signaled if its count is nonzero,
-  and is acquired by decrementing its count by one. A mutex is
-  considered to be signaled if it is unowned or if its owner matches
-  the ``owner`` argument, and is acquired by incrementing its
-  recursion count by one and setting its owner to the ``owner``
-  argument.
+  A semaphore is considered to be signaled if its count is nonzero. It
+  is acquired by decrementing its count by one if the
+  ``WINESYNC_SEM_GETONWAIT`` flag was used to create it; otherwise no
+  operation is done to acquire the semaphore. A mutex is considered to
+  be signaled if it is unowned or if its owner matches the ``owner``
+  argument, and is acquired by incrementing its recursion count by one
+  and setting its owner to the ``owner`` argument.
 
   Acquisition is atomic and totally ordered with respect to other
   operations on the same object. If two wait operations (with
   different ``owner`` identifiers) are queued on the same mutex, only
   one is signaled. If two wait operations are queued on the same
-  semaphore, and a value of one is posted to it, only one is signaled.
+  semaphore (which was not created with the ``WINESYNC_SEM_GETONWAIT``
+  flag set), and a value of one is posted to it, only one is signaled.
   The order in which threads are signaled is not guaranteed.
+
+  (If two wait operations are queued on the same semaphore, and the
+  semaphore was created with the ``WINESYNC_SEM_GETONWAIT`` flag set,
+  and a value of one is posted to it, both threads are signaled, and
+  the semaphore retains a count of one.)
 
   If an inconsistent mutex is acquired, the ioctl fails with
   ``EOWNERDEAD``. Although this is a failure return, the function may
