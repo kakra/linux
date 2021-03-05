@@ -29,6 +29,7 @@ TEST(semaphore_state)
 	sem_args.count = 3;
 	sem_args.max = 2;
 	sem_args.sem = 0xdeadbeef;
+	sem_args.flags = WINESYNC_SEM_GETONWAIT;
 	ret = ioctl(fd, WINESYNC_IOC_CREATE_SEM, &sem_args);
 	EXPECT_EQ(-1, ret);
 	EXPECT_EQ(EINVAL, errno);
@@ -417,6 +418,7 @@ TEST(wait_any)
 	sem_args.count = 2;
 	sem_args.max = 3;
 	sem_args.sem = 0xdeadbeef;
+	sem_args.flags = WINESYNC_SEM_GETONWAIT;
 	ret = ioctl(fd, WINESYNC_IOC_CREATE_SEM, &sem_args);
 	EXPECT_EQ(0, ret);
 	EXPECT_NE(0xdeadbeef, sem_args.sem);
@@ -614,6 +616,7 @@ TEST(wait_all)
 	sem_args.count = 2;
 	sem_args.max = 3;
 	sem_args.sem = 0xdeadbeef;
+	sem_args.flags = WINESYNC_SEM_GETONWAIT;
 	ret = ioctl(fd, WINESYNC_IOC_CREATE_SEM, &sem_args);
 	EXPECT_EQ(0, ret);
 	EXPECT_NE(0xdeadbeef, sem_args.sem);
@@ -898,6 +901,7 @@ TEST(wake_any)
 	sem_args.count = 0;
 	sem_args.max = 3;
 	sem_args.sem = 0xdeadbeef;
+	sem_args.flags = WINESYNC_SEM_GETONWAIT;
 	ret = ioctl(fd, WINESYNC_IOC_CREATE_SEM, &sem_args);
 	EXPECT_EQ(0, ret);
 	EXPECT_NE(0xdeadbeef, sem_args.sem);
@@ -1024,6 +1028,7 @@ TEST(wake_all)
 	sem_args.count = 0;
 	sem_args.max = 3;
 	sem_args.sem = 0xdeadbeef;
+	sem_args.flags = WINESYNC_SEM_GETONWAIT;
 	ret = ioctl(fd, WINESYNC_IOC_CREATE_SEM, &sem_args);
 	EXPECT_EQ(0, ret);
 	EXPECT_NE(0xdeadbeef, sem_args.sem);

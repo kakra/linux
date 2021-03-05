@@ -62,6 +62,7 @@ struct winesync_obj {
 		struct {
 			__u32 count;
 			__u32 max;
+			__u32 flags;
 		} sem;
 		struct {
 			__u32 count;
@@ -233,7 +234,8 @@ static void try_wake_all(struct winesync_device *dev, struct winesync_q *q,
 
 			switch (obj->type) {
 			case WINESYNC_TYPE_SEM:
-				obj->u.sem.count--;
+				if (obj->u.sem.flags & WINESYNC_SEM_GETONWAIT)
+					obj->u.sem.count--;
 				break;
 			case WINESYNC_TYPE_MUTEX:
 				if (obj->u.mutex.ownerdead)
@@ -278,7 +280,8 @@ static void try_wake_any_sem(struct winesync_obj *sem)
 			break;
 
 		if (atomic_cmpxchg(&q->signaled, -1, entry->index) == -1) {
-			sem->u.sem.count--;
+			if (sem->u.sem.flags & WINESYNC_SEM_GETONWAIT)
+				sem->u.sem.count--;
 			wake_up_process(q->task);
 		}
 	}
@@ -322,6 +325,9 @@ static int winesync_create_sem(struct winesync_device *dev, void __user *argp)
 	if (args.count > args.max)
 		return -EINVAL;
 
+	if (args.flags & ~WINESYNC_SEM_GETONWAIT)
+		return -EINVAL;
+
 	sem = kzalloc(sizeof(*sem), GFP_KERNEL);
 	if (!sem)
 		return -ENOMEM;
@@ -330,6 +336,7 @@ static int winesync_create_sem(struct winesync_device *dev, void __user *argp)
 	sem->type = WINESYNC_TYPE_SEM;
 	sem->u.sem.count = args.count;
 	sem->u.sem.max = args.max;
+	sem->u.sem.flags = args.flags;
 
 	mutex_lock(&dev->table_lock);
 	ret = idr_alloc(&dev->objects, sem, 0, 0, GFP_KERNEL);
@@ -554,6 +561,7 @@ static int winesync_read_sem(struct winesync_device *dev, void __user *argp)
 	spin_lock(&sem->lock);
 	args.count = sem->u.sem.count;
 	args.max = sem->u.sem.max;
+	args.flags = sem->u.sem.flags;
 	spin_unlock(&sem->lock);
 
 	put_obj(sem);

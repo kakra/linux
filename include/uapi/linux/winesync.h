@@ -10,10 +10,13 @@
 
 #include <linux/types.h>
 
+#define WINESYNC_SEM_GETONWAIT 1
+
 struct winesync_sem_args {
 	__u32 sem;
 	__u32 count;
 	__u32 max;
+	__u32 flags;
 };
 
 struct winesync_mutex_args {
