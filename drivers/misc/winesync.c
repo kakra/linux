@@ -403,6 +403,41 @@ static int winesync_delete(struct winesync_device *dev, void __user *argp)
 	return 0;
 }
 
+static int winesync_get_sem(struct winesync_device *dev, void __user *argp)
+{
+	struct winesync_obj *sem;
+	int ret = -EWOULDBLOCK;
+	__u32 id;
+
+	if (get_user(id, (__u32 __user *)argp))
+		return -EFAULT;
+
+	sem = get_obj(dev, id);
+	if (!sem)
+		return -EINVAL;
+	if (sem->type != WINESYNC_TYPE_SEM) {
+		put_obj(sem);
+		return -EINVAL;
+	}
+
+	spin_lock(&sem->lock);
+
+	if (sem->u.sem.count) {
+		/*
+		 * Decrement the semaphore's count, regardless of whether it
+		 * has the WINESYNC_SEM_GETONWAIT flag set.
+		 */
+		sem->u.sem.count--;
+		ret = 0;
+	}
+
+	spin_unlock(&sem->lock);
+
+	put_obj(sem);
+
+	return ret;
+}
+
 /*
  * Actually change the semaphore state, returning -EOVERFLOW if it is made
  * invalid.
@@ -947,6 +982,8 @@ static long winesync_char_ioctl(struct file *file, unsigned int cmd,
 		return winesync_create_mutex(dev, argp);
 	case WINESYNC_IOC_DELETE:
 		return winesync_delete(dev, argp);
+	case WINESYNC_IOC_GET_SEM:
+		return winesync_get_sem(dev, argp);
 	case WINESYNC_IOC_PUT_SEM:
 		return winesync_put_sem(dev, argp);
 	case WINESYNC_IOC_PUT_MUTEX:
