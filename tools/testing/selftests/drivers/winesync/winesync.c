@@ -155,6 +155,61 @@ TEST(semaphore_state)
 	EXPECT_EQ(1, sem_args.count);
 	EXPECT_EQ(2, sem_args.max);
 
+	/* Test PULSE. */
+
+	sem_args.count = 2;
+	ret = ioctl(fd, WINESYNC_IOC_PULSE_SEM, &sem_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EOVERFLOW, errno);
+
+	sem_args.count = 0xdeadbeef;
+	sem_args.max = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+	EXPECT_EQ(2, sem_args.max);
+
+	sem_args.count = 1;
+	ret = ioctl(fd, WINESYNC_IOC_PUT_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+
+	sem_args.count = 1;
+	ret = ioctl(fd, WINESYNC_IOC_PULSE_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(1, sem_args.count);
+
+	sem_args.count = 0xdeadbeef;
+	sem_args.max = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+	EXPECT_EQ(2, sem_args.max);
+
+	sem_args.count = 1;
+	ret = ioctl(fd, WINESYNC_IOC_PULSE_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+
+	sem_args.count = 0xdeadbeef;
+	sem_args.max = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+	EXPECT_EQ(2, sem_args.max);
+
+	sem_args.count = 2;
+	ret = ioctl(fd, WINESYNC_IOC_PULSE_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+
+	sem_args.count = 0xdeadbeef;
+	sem_args.max = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+	EXPECT_EQ(2, sem_args.max);
+
 	ret = ioctl(fd, WINESYNC_IOC_DELETE, &sem_args.sem);
 	EXPECT_EQ(0, ret);
 
@@ -328,6 +383,61 @@ TEST(semaphore_state_getonwait)
 	ret = ioctl(fd, WINESYNC_IOC_READ_SEM, &sem_args);
 	EXPECT_EQ(0, ret);
 	EXPECT_EQ(1, sem_args.count);
+	EXPECT_EQ(2, sem_args.max);
+
+	/* Test PULSE. */
+
+	sem_args.count = 2;
+	ret = ioctl(fd, WINESYNC_IOC_PULSE_SEM, &sem_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EOVERFLOW, errno);
+
+	sem_args.count = 0xdeadbeef;
+	sem_args.max = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+	EXPECT_EQ(2, sem_args.max);
+
+	sem_args.count = 1;
+	ret = ioctl(fd, WINESYNC_IOC_PUT_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+
+	sem_args.count = 1;
+	ret = ioctl(fd, WINESYNC_IOC_PULSE_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(1, sem_args.count);
+
+	sem_args.count = 0xdeadbeef;
+	sem_args.max = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+	EXPECT_EQ(2, sem_args.max);
+
+	sem_args.count = 1;
+	ret = ioctl(fd, WINESYNC_IOC_PULSE_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+
+	sem_args.count = 0xdeadbeef;
+	sem_args.max = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+	EXPECT_EQ(2, sem_args.max);
+
+	sem_args.count = 2;
+	ret = ioctl(fd, WINESYNC_IOC_PULSE_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+
+	sem_args.count = 0xdeadbeef;
+	sem_args.max = 0xdeadbeef;
+	ret = ioctl(fd, WINESYNC_IOC_READ_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
 	EXPECT_EQ(2, sem_args.max);
 
 	ret = ioctl(fd, WINESYNC_IOC_DELETE, &sem_args.sem);
@@ -951,6 +1061,10 @@ TEST(invalid_objects)
 	EXPECT_EQ(-1, ret);
 	EXPECT_EQ(EINVAL, errno);
 
+	ret = ioctl(fd, WINESYNC_IOC_PULSE_SEM, &sem_args);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EINVAL, errno);
+
 	ret = ioctl(fd, WINESYNC_IOC_READ_SEM, &sem_args);
 	EXPECT_EQ(-1, ret);
 	EXPECT_EQ(EINVAL, errno);
@@ -1136,6 +1250,30 @@ TEST(wake_any)
 	EXPECT_EQ(0, thread_args.ret);
 	EXPECT_EQ(0, wait_args.index);
 
+	/* test waking the semaphore via pulse */
+
+	get_abs_timeout(&timeout, CLOCK_MONOTONIC, 1000);
+	wait_args.owner = 456;
+	ret = pthread_create(&thread, NULL, wait_thread, &thread_args);
+	EXPECT_EQ(0, ret);
+
+	ret = wait_for_thread(thread, 100);
+	EXPECT_EQ(ETIMEDOUT, ret);
+
+	sem_args.count = 2;
+	ret = ioctl(fd, WINESYNC_IOC_PULSE_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+
+	ret = ioctl(fd, WINESYNC_IOC_READ_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
+
+	ret = wait_for_thread(thread, 100);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, thread_args.ret);
+	EXPECT_EQ(0, wait_args.index);
+
 	/* test waking the mutex */
 
 	/* first grab it again for owner 123 */
@@ -1281,19 +1419,38 @@ TEST(wake_all)
 	EXPECT_EQ(0, mutex_args.count);
 	EXPECT_EQ(0, mutex_args.owner);
 
-	sem_args.count = 2;
+	sem_args.count = 1;
 	ret = ioctl(fd, WINESYNC_IOC_PUT_SEM, &sem_args);
 	EXPECT_EQ(0, ret);
 	EXPECT_EQ(0, sem_args.count);
 
 	ret = ioctl(fd, WINESYNC_IOC_READ_SEM, &sem_args);
 	EXPECT_EQ(0, ret);
-	EXPECT_EQ(1, sem_args.count);
+	EXPECT_EQ(0, sem_args.count);
 
 	ret = ioctl(fd, WINESYNC_IOC_READ_MUTEX, &mutex_args);
 	EXPECT_EQ(0, ret);
 	EXPECT_EQ(1, mutex_args.count);
 	EXPECT_EQ(456, mutex_args.owner);
+
+	ret = wait_for_thread(thread, 100);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, thread_args.ret);
+
+	/* test waking the semaphore via pulse */
+
+	get_abs_timeout(&timeout, CLOCK_MONOTONIC, 1000);
+	wait_args.owner = 456;
+	ret = pthread_create(&thread, NULL, wait_thread, &thread_args);
+	EXPECT_EQ(0, ret);
+
+	ret = wait_for_thread(thread, 100);
+	EXPECT_EQ(ETIMEDOUT, ret);
+
+	sem_args.count = 1;
+	ret = ioctl(fd, WINESYNC_IOC_PULSE_SEM, &sem_args);
+	EXPECT_EQ(0, ret);
+	EXPECT_EQ(0, sem_args.count);
 
 	ret = wait_for_thread(thread, 100);
 	EXPECT_EQ(0, ret);
