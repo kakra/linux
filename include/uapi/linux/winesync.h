@@ -41,6 +41,8 @@ struct winesync_wait_args {
 #define WINESYNC_IOC_CREATE_MUTEX	_IOWR(WINESYNC_IOC_BASE, 1, \
 					      struct winesync_mutex_args)
 #define WINESYNC_IOC_GET_SEM		_IOW (WINESYNC_IOC_BASE, 2, __u32)
+#define WINESYNC_IOC_PULSE_SEM		_IOWR(WINESYNC_IOC_BASE, 3, \
+					      struct winesync_sem_args)
 #define WINESYNC_IOC_PUT_SEM		_IOWR(WINESYNC_IOC_BASE, 5, \
 					      struct winesync_sem_args)
 #define WINESYNC_IOC_PUT_MUTEX		_IOWR(WINESYNC_IOC_BASE, 6, \
