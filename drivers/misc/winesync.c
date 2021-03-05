@@ -6,25 +6,153 @@
  */
 
 #include <linux/fs.h>
+#include <linux/idr.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/slab.h>
+#include <uapi/linux/winesync.h>
 
 #define WINESYNC_NAME	"winesync"
 
+enum winesync_type {
+	WINESYNC_TYPE_SEM,
+};
+
+struct winesync_obj {
+	struct kref refcount;
+
+	enum winesync_type type;
+
+	union {
+		struct {
+			__u32 count;
+			__u32 max;
+		} sem;
+	} u;
+};
+
+struct winesync_device {
+	struct mutex table_lock;
+	struct idr objects;
+};
+
+static void destroy_obj(struct kref *ref)
+{
+	struct winesync_obj *obj;
+
+	obj = container_of(ref, struct winesync_obj, refcount);
+	kfree(obj);
+}
+
+static void put_obj(struct winesync_obj *obj)
+{
+	kref_put(&obj->refcount, destroy_obj);
+}
+
 static int winesync_char_open(struct inode *inode, struct file *file)
 {
+	struct winesync_device *dev;
+
+	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+	if (!dev)
+		return -ENOMEM;
+
+	idr_init(&dev->objects);
+	mutex_init(&dev->table_lock);
+
+	file->private_data = dev;
 	return nonseekable_open(inode, file);
 }
 
 static int winesync_char_release(struct inode *inode, struct file *file)
 {
+	struct winesync_device *dev = file->private_data;
+	struct winesync_obj *obj;
+	int id;
+
+	mutex_lock(&dev->table_lock);
+	idr_for_each_entry(&dev->objects, obj, id) {
+		idr_remove(&dev->objects, id);
+		synchronize_rcu();
+		put_obj(obj);
+	}
+	mutex_unlock(&dev->table_lock);
+
+	kfree(dev);
+
+	return 0;
+}
+
+static void winesync_init_obj(struct winesync_obj *obj)
+{
+	kref_init(&obj->refcount);
+}
+
+static int winesync_create_sem(struct winesync_device *dev, void __user *argp)
+{
+	struct winesync_sem_args __user *user_args = argp;
+	struct winesync_sem_args args;
+	struct winesync_obj *sem;
+	int ret;
+
+	if (copy_from_user(&args, argp, sizeof(args)))
+		return -EFAULT;
+
+	if (args.count > args.max)
+		return -EINVAL;
+
+	sem = kzalloc(sizeof(*sem), GFP_KERNEL);
+	if (!sem)
+		return -ENOMEM;
+
+	winesync_init_obj(sem);
+	sem->type = WINESYNC_TYPE_SEM;
+	sem->u.sem.count = args.count;
+	sem->u.sem.max = args.max;
+
+	mutex_lock(&dev->table_lock);
+	ret = idr_alloc(&dev->objects, sem, 0, 0, GFP_KERNEL);
+	mutex_unlock(&dev->table_lock);
+
+	if (ret < 0) {
+		kfree(sem);
+		return ret;
+	}
+
+	return put_user(ret, &user_args->sem);
+}
+
+static int winesync_delete(struct winesync_device *dev, void __user *argp)
+{
+	struct winesync_obj *obj;
+	__u32 id;
+
+	if (get_user(id, (__u32 __user *)argp))
+		return -EFAULT;
+
+	mutex_lock(&dev->table_lock);
+	obj = idr_remove(&dev->objects, id);
+	mutex_unlock(&dev->table_lock);
+
+	if (!obj)
+		return -EINVAL;
+
+	put_obj(obj);
 	return 0;
 }
 
 static long winesync_char_ioctl(struct file *file, unsigned int cmd,
 				unsigned long parm)
 {
+	struct winesync_device *dev = file->private_data;
+	void __user *argp = (void __user *)parm;
+
 	switch (cmd) {
+	case WINESYNC_IOC_CREATE_SEM:
+		return winesync_create_sem(dev, argp);
+	case WINESYNC_IOC_DELETE:
+		return winesync_delete(dev, argp);
 	default:
 		return -ENOSYS;
 	}
