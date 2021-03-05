@@ -66,6 +66,7 @@ struct winesync_obj {
 		struct {
 			__u32 count;
 			__u32 owner;
+			bool ownerdead;
 		} mutex;
 	} u;
 };
@@ -89,6 +90,7 @@ struct winesync_q {
 	atomic_t signaled;
 
 	bool all;
+	bool ownerdead;
 	__u32 count;
 	struct winesync_q_entry entries[];
 };
@@ -234,6 +236,9 @@ static void try_wake_all(struct winesync_device *dev, struct winesync_q *q,
 				obj->u.sem.count--;
 				break;
 			case WINESYNC_TYPE_MUTEX:
+				if (obj->u.mutex.ownerdead)
+					q->ownerdead = true;
+				obj->u.mutex.ownerdead = false;
 				obj->u.mutex.count++;
 				obj->u.mutex.owner = q->owner;
 				break;
@@ -294,6 +299,9 @@ static void try_wake_any_mutex(struct winesync_obj *mutex)
 			continue;
 
 		if (atomic_cmpxchg(&q->signaled, -1, entry->index) == -1) {
+			if (mutex->u.mutex.ownerdead)
+				q->ownerdead = true;
+			mutex->u.mutex.ownerdead = false;
 			mutex->u.mutex.count++;
 			mutex->u.mutex.owner = q->owner;
 			wake_up_process(q->task);
@@ -357,9 +365,9 @@ static int winesync_create_mutex(struct winesync_device *dev, void __user *argp)
 	mutex->u.mutex.count = args.count;
 	mutex->u.mutex.owner = args.owner;
 
-	spin_lock(&dev->table_lock);
+	mutex_lock(&dev->table_lock);
 	ret = idr_alloc(&dev->objects, mutex, 0, 0, GFP_KERNEL);
-	spin_unlock(&dev->table_lock);
+	mutex_unlock(&dev->table_lock);
 
 	if (ret < 0) {
 		kfree(mutex);
@@ -524,6 +532,71 @@ static int winesync_put_mutex(struct winesync_device *dev, void __user *argp)
 	return ret;
 }
 
+/*
+ * Actually change the mutex state to mark its owner as dead.
+ */
+static void put_mutex_ownerdead_state(struct winesync_obj *mutex)
+{
+	lockdep_assert_held(&mutex->lock);
+
+	mutex->u.mutex.ownerdead = true;
+	mutex->u.mutex.owner = 0;
+	mutex->u.mutex.count = 0;
+}
+
+static int winesync_kill_owner(struct winesync_device *dev, void __user *argp)
+{
+	struct winesync_obj *obj;
+	__u32 owner;
+	int id;
+
+	if (get_user(owner, (__u32 __user *)argp))
+		return -EFAULT;
+	if (!owner)
+		return -EINVAL;
+
+	rcu_read_lock();
+
+	idr_for_each_entry(&dev->objects, obj, id) {
+		if (!kref_get_unless_zero(&obj->refcount))
+			continue;
+
+		if (obj->type != WINESYNC_TYPE_MUTEX) {
+			put_obj(obj);
+			continue;
+		}
+
+		if (refcount_read(&obj->all_hint) > 1) {
+			spin_lock(&dev->wait_all_lock);
+			spin_lock(&obj->lock);
+
+			if (obj->u.mutex.owner == owner) {
+				put_mutex_ownerdead_state(obj);
+				try_wake_all_obj(dev, obj);
+				try_wake_any_mutex(obj);
+			}
+
+			spin_unlock(&obj->lock);
+			spin_unlock(&dev->wait_all_lock);
+		} else {
+			spin_lock(&obj->lock);
+
+			if (obj->u.mutex.owner == owner) {
+				put_mutex_ownerdead_state(obj);
+				try_wake_any_mutex(obj);
+			}
+
+			spin_unlock(&obj->lock);
+		}
+
+		put_obj(obj);
+	}
+
+	rcu_read_unlock();
+
+	return 0;
+}
+
 static int winesync_schedule(const struct winesync_q *q, ktime_t *timeout)
 {
 	int ret = 0;
@@ -589,6 +662,7 @@ static int setup_wait(struct winesync_device *dev,
 	q->owner = args->owner;
 	atomic_set(&q->signaled, -1);
 	q->all = all;
+	q->ownerdead = false;
 	q->count = count;
 
 	for (i = 0; i < count; i++) {
@@ -700,7 +774,7 @@ static int winesync_wait_any(struct winesync_device *dev, void __user *argp)
 		struct winesync_wait_args __user *user_args = argp;
 
 		/* even if we caught a signal, we need to communicate success */
-		ret = 0;
+		ret = q->ownerdead ? -EOWNERDEAD : 0;
 
 		if (put_user(atomic_read(&q->signaled), &user_args->index))
 			ret = -EFAULT;
@@ -779,7 +853,7 @@ static int winesync_wait_all(struct winesync_device *dev, void __user *argp)
 
 	if (atomic_read(&q->signaled) != -1) {
 		/* even if we caught a signal, we need to communicate success */
-		ret = 0;
+		ret = q->ownerdead ? -EOWNERDEAD : 0;
 	} else if (!ret) {
 		ret = -ETIMEDOUT;
 	}
@@ -805,6 +879,8 @@ static long winesync_char_ioctl(struct file *file, unsigned int cmd,
 		return winesync_put_sem(dev, argp);
 	case WINESYNC_IOC_PUT_MUTEX:
 		return winesync_put_mutex(dev, argp);
+	case WINESYNC_IOC_KILL_OWNER:
+		return winesync_kill_owner(dev, argp);
 	case WINESYNC_IOC_WAIT_ANY:
 		return winesync_wait_any(dev, argp);
 	case WINESYNC_IOC_WAIT_ALL:
