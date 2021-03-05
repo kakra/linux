@@ -157,6 +157,46 @@ The ioctls are as follows:
   semaphore will be woken and the semaphore's count decremented
   appropriately.
 
+.. c:macro:: WINESYNC_IOC_PULSE_SEM
+
+  This operation is identical to ``WINESYNC_IOC_PUT_SEM``, with one
+  notable exception: the semaphore is always left in an *unsignaled*
+  state, regardless of the initial count or the count added by the
+  ioctl. That is, the count after a pulse operation will always be
+  zero. The entire operation is atomic.
+
+  Hence, if the semaphore was created with the
+  ``WINESYNC_SEM_GETONWAIT`` flag set, and an unsignaled semaphore is
+  "pulsed" with a count of 2, at most two eligible threads (i.e.
+  threads not otherwise constrained due to ``WINESYNC_IOC_WAIT_ALL``)
+  will be woken up, and any others will remain sleeping. If less than
+  two eligible threads are waiting on the semaphore, all of them will
+  be woken up, and the semaphore's count will remain at zero. On the
+  other hand, if the semaphore was created without the
+  ``WINESYNC_SEM_GETONWAIT``, all eligible threads will be woken up,
+  making ``count`` effectively redundant. In either case, a
+  simultaneous ``WINESYNC_IOC_READ_SEM`` ioctl from another thread
+  will always report a count of zero.
+
+  If adding ``count`` to the semaphore's current count would raise the
+  latter past the semaphore's maximum count, the ioctl fails with
+  ``EOVERFLOW``. However, in this case the semaphore's count will
+  still be reset to zero.
+
+.. c:macro:: WINESYNC_IOC_GET_SEM
+
+  Attempt to acquire a semaphore object. Takes an input-only pointer
+  to a 32-bit integer denoting the semaphore to acquire.
+
+  This operation does not block. If the semaphore's count was zero, it
+  fails with ``EWOULDBLOCK``. Otherwise, the semaphore's count is
+  decremented by one. The behaviour of this operation is unaffected by
+  whether the semaphore was created with the
+  ``WINESYNC_SEM_GETONWAIT`` flag set.
+
+  The operation is atomic and totally ordered with respect to other
+  operations on the same semaphore.
+
 .. c:macro:: WINESYNC_IOC_PUT_MUTEX
 
   Release a mutex object. Takes a pointer to struct
