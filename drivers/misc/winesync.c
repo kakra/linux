@@ -23,7 +23,36 @@ struct winesync_obj {
 	struct kref refcount;
 	spinlock_t lock;
 
+	/*
+	 * any_waiters is protected by the object lock, but all_waiters is
+	 * protected by the device wait_all_lock.
+	 */
 	struct list_head any_waiters;
+	struct list_head all_waiters;
+
+	/*
+	 * Hint describing how many tasks are queued on this object in a
+	 * wait-all operation.
+	 *
+	 * Any time we do a wake, we may need to wake "all" waiters as well as
+	 * "any" waiters. In order to atomically wake "all" waiters, we must
+	 * lock all of the objects, and that means grabbing the wait_all_lock
+	 * below (and, due to lock ordering rules, before locking this object).
+	 * However, wait-all is a rare operation, and grabbing the wait-all
+	 * lock for every wake would create unnecessary contention. Therefore we
+	 * first check whether all_hint is one, and, if it is, we skip trying
+	 * to wake "all" waiters.
+	 *
+	 * This "refcount" isn't protected by any lock. It might change during
+	 * the course of a wake, but there's no meaningful race there; it's only
+	 * a hint.
+	 *
+	 * Use refcount_t rather than atomic_t to take advantage of saturation.
+	 * This does mean that the "no waiters" case is signified by all_hint
+	 * being one, rather than zero (otherwise we would get spurious
+	 * warnings).
+	 */
+	refcount_t all_hint;
 
 	enum winesync_type type;
 
@@ -54,11 +83,24 @@ struct winesync_q {
 	 */
 	atomic_t signaled;
 
+	bool all;
 	__u32 count;
 	struct winesync_q_entry entries[];
 };
 
 struct winesync_device {
+	/*
+	 * Wait-all operations must atomically grab all objects, and be totally
+	 * ordered with respect to each other and wait-any operations. If one
+	 * thread is trying to acquire several objects, another thread cannot
+	 * touch the object at the same time.
+	 *
+	 * We achieve this by grabbing multiple object locks at the same time.
+	 * However, this creates a lock ordering problem. To solve that problem,
+	 * wait_all_lock is taken first whenever multiple objects must be locked
+	 * at the same time.
+	 */
+	spinlock_t wait_all_lock;
 	struct mutex table_lock;
 	struct idr objects;
 };
@@ -98,6 +140,7 @@ static int winesync_char_open(struct inode *inode, struct file *file)
 		return -ENOMEM;
 
 	idr_init(&dev->objects);
+	spin_lock_init(&dev->wait_all_lock);
 	mutex_init(&dev->table_lock);
 
 	file->private_data = dev;
@@ -126,8 +169,82 @@ static int winesync_char_release(struct inode *inode, struct file *file)
 static void winesync_init_obj(struct winesync_obj *obj)
 {
 	kref_init(&obj->refcount);
+	refcount_set(&obj->all_hint, 1);
 	spin_lock_init(&obj->lock);
 	INIT_LIST_HEAD(&obj->any_waiters);
+	INIT_LIST_HEAD(&obj->all_waiters);
+}
+
+static bool is_signaled(struct winesync_obj *obj, __u32 owner)
+{
+	lockdep_assert_held(&obj->lock);
+
+	switch (obj->type) {
+	case WINESYNC_TYPE_SEM:
+		return !!obj->u.sem.count;
+	}
+
+	WARN(1, "bad object type %#x\n", obj->type);
+	return false;
+}
+
+/*
+ * "locked_obj" is an optional pointer to an object which is already locked and
+ * should not be locked again. This is necessary so that changing an object's
+ * state and waking it can be a single atomic operation.
+ */
+static void try_wake_all(struct winesync_device *dev, struct winesync_q *q,
+			 struct winesync_obj *locked_obj)
+{
+	__u32 count = q->count;
+	bool can_wake = true;
+	__u32 i;
+
+	lockdep_assert_held(&dev->wait_all_lock);
+	if (locked_obj)
+		lockdep_assert_held(&locked_obj->lock);
+
+	for (i = 0; i < count; i++) {
+		if (q->entries[i].obj != locked_obj)
+			spin_lock(&q->entries[i].obj->lock);
+	}
+
+	for (i = 0; i < count; i++) {
+		if (!is_signaled(q->entries[i].obj, q->owner)) {
+			can_wake = false;
+			break;
+		}
+	}
+
+	if (can_wake && atomic_cmpxchg(&q->signaled, -1, 0) == -1) {
+		for (i = 0; i < count; i++) {
+			struct winesync_obj *obj = q->entries[i].obj;
+
+			switch (obj->type) {
+			case WINESYNC_TYPE_SEM:
+				obj->u.sem.count--;
+				break;
+			}
+		}
+		wake_up_process(q->task);
+	}
+
+	for (i = 0; i < count; i++) {
+		if (q->entries[i].obj != locked_obj)
+			spin_unlock(&q->entries[i].obj->lock);
+	}
+}
+
+static void try_wake_all_obj(struct winesync_device *dev,
+			     struct winesync_obj *obj)
+{
+	struct winesync_q_entry *entry;
+
+	lockdep_assert_held(&dev->wait_all_lock);
+	lockdep_assert_held(&obj->lock);
+
+	list_for_each_entry(entry, &obj->all_waiters, node)
+		try_wake_all(dev, entry->q, obj);
 }
 
 static void try_wake_any_sem(struct winesync_obj *sem)
@@ -237,11 +354,29 @@ static int winesync_put_sem(struct winesync_device *dev, void __user *argp)
 		return -EINVAL;
 	}
 
-	spin_lock(&sem->lock);
-	ret = put_sem_state(sem, args.count);
-	if (!ret)
-		try_wake_any_sem(sem);
-	spin_unlock(&sem->lock);
+	if (refcount_read(&sem->all_hint) > 1) {
+		spin_lock(&dev->wait_all_lock);
+		spin_lock(&sem->lock);
+
+		prev_count = sem->u.sem.count;
+		ret = put_sem_state(sem, args.count);
+		if (!ret) {
+			try_wake_all_obj(dev, sem);
+			try_wake_any_sem(sem);
+		}
+
+		spin_unlock(&sem->lock);
+		spin_unlock(&dev->wait_all_lock);
+	} else {
+		spin_lock(&sem->lock);
+
+		prev_count = sem->u.sem.count;
+		ret = put_sem_state(sem, args.count);
+		if (!ret)
+			try_wake_any_sem(sem);
+
+		spin_unlock(&sem->lock);
+	}
 
 	put_obj(sem);
 
@@ -278,7 +413,7 @@ static int winesync_schedule(const struct winesync_q *q, ktime_t *timeout)
  * yet. Also, calculate the relative timeout in jiffies.
  */
 static int setup_wait(struct winesync_device *dev,
-		      const struct winesync_wait_args *args,
+		      const struct winesync_wait_args *args, bool all,
 		      ktime_t *ret_timeout, struct winesync_q **ret_q)
 {
 	const __u32 count = args->count;
@@ -315,6 +450,7 @@ static int setup_wait(struct winesync_device *dev,
 	q->task = current;
 	q->owner = args->owner;
 	atomic_set(&q->signaled, -1);
+	q->all = all;
 	q->count = count;
 
 	for (i = 0; i < count; i++) {
@@ -323,6 +459,16 @@ static int setup_wait(struct winesync_device *dev,
 
 		if (!obj)
 			goto err;
+
+		if (all) {
+			/* Check that the objects are all distinct. */
+			for (j = 0; j < i; j++) {
+				if (obj == q->entries[j].obj) {
+					put_obj(obj);
+					goto err;
+				}
+			}
+		}
 
 		entry->obj = obj;
 		entry->q = q;
@@ -365,7 +511,7 @@ static int winesync_wait_any(struct winesync_device *dev, void __user *argp)
 	if (!args.owner)
 		return -EINVAL;
 
-	ret = setup_wait(dev, &args, &timeout, &q);
+	ret = setup_wait(dev, &args, false, &timeout, &q);
 	if (ret < 0)
 		return ret;
 
@@ -425,6 +571,82 @@ static int winesync_wait_any(struct winesync_device *dev, void __user *argp)
 	return ret;
 }
 
+static int winesync_wait_all(struct winesync_device *dev, void __user *argp)
+{
+	struct winesync_wait_args args;
+	struct winesync_q *q;
+	ktime_t timeout;
+	__u32 i;
+	int ret;
+
+	if (copy_from_user(&args, argp, sizeof(args)))
+		return -EFAULT;
+	if (!args.owner)
+		return -EINVAL;
+
+	ret = setup_wait(dev, &args, true, &timeout, &q);
+	if (ret < 0)
+		return ret;
+
+	/* queue ourselves */
+
+	spin_lock(&dev->wait_all_lock);
+
+	for (i = 0; i < args.count; i++) {
+		struct winesync_q_entry *entry = &q->entries[i];
+		struct winesync_obj *obj = q->entries[i].obj;
+
+		refcount_inc(&obj->all_hint);
+
+		/*
+		 * obj->all_waiters is protected by dev->wait_all_lock rather
+		 * than obj->lock, so there is no need to acquire it here.
+		 */
+		list_add_tail(&entry->node, &obj->all_waiters);
+	}
+
+	/* check if we are already signaled */
+
+	try_wake_all(dev, q, NULL);
+
+	spin_unlock(&dev->wait_all_lock);
+
+	/* sleep */
+
+	ret = winesync_schedule(q, args.timeout ? &timeout : NULL);
+
+	/* and finally, unqueue */
+
+	spin_lock(&dev->wait_all_lock);
+
+	for (i = 0; i < args.count; i++) {
+		struct winesync_q_entry *entry = &q->entries[i];
+		struct winesync_obj *obj = q->entries[i].obj;
+
+		/*
+		 * obj->all_waiters is protected by dev->wait_all_lock rather
+		 * than obj->lock, so there is no need to acquire it here.
+		 */
+		list_del(&entry->node);
+
+		refcount_dec(&obj->all_hint);
+
+		put_obj(obj);
+	}
+
+	spin_unlock(&dev->wait_all_lock);
+
+	if (atomic_read(&q->signaled) != -1) {
+		/* even if we caught a signal, we need to communicate success */
+		ret = 0;
+	} else if (!ret) {
+		ret = -ETIMEDOUT;
+	}
+
+	kfree(q);
+	return ret;
+}
+
 static long winesync_char_ioctl(struct file *file, unsigned int cmd,
 				unsigned long parm)
 {
@@ -440,6 +662,8 @@ static long winesync_char_ioctl(struct file *file, unsigned int cmd,
 		return winesync_put_sem(dev, argp);
 	case WINESYNC_IOC_WAIT_ANY:
 		return winesync_wait_any(dev, argp);
+	case WINESYNC_IOC_WAIT_ALL:
+		return winesync_wait_all(dev, argp);
 	default:
 		return -ENOSYS;
 	}

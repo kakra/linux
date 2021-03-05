@@ -34,5 +34,7 @@ struct winesync_wait_args {
 #define WINESYNC_IOC_DELETE		_IOW (WINESYNC_IOC_BASE, 10, __u32)
 #define WINESYNC_IOC_WAIT_ANY		_IOWR(WINESYNC_IOC_BASE, 11, \
 					      struct winesync_wait_args)
+#define WINESYNC_IOC_WAIT_ALL		_IOW (WINESYNC_IOC_BASE, 12, \
+					      struct winesync_wait_args)
 
 #endif
