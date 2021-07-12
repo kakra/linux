@@ -47,6 +47,79 @@ config SPARSEMEM_MANUAL
 
 endchoice
 
+config UNEVICTABLE_FILE
+	bool "Keep some file pages under memory pressure"
+	depends on SYSCTL
+	def_bool y
+	help
+	  Keep some file pages still mapped under memory pressure
+	  to avoid potential disk thrashing that may occur due to
+	  evicting running executables code.
+
+	  The UNEVICTABLE_FILE_KBYTES_LOW value defines a threshold
+	  to activate file pages eviction throttling.
+	  The vm.unevictable_file_kbytes_low sysctl knob is used to
+	  change the amount in the runtime (setting it to 0
+	  effectively disables this feature).
+
+	  Recommended value: 262144 for a typical desktop workload.
+
+	  The UNEVICTABLE_FILE_KBYTES_MIN value sets the amount of
+	  pages to keep as a hard limit.
+	  The vm.unevictable_file_kbytes_min sysctl knob is used to
+	  change the amount in the runtime (setting it to 0
+	  effectively disables this feature).
+
+	  Recommended value: 131072 for a typical desktop workload.
+
+	  See also: Documentation/admin-guide/sysctl/vm.rst
+
+config UNEVICTABLE_FILE_KBYTES_LOW
+	int "Default value for vm.unevictable_file_kbytes_low"
+	depends on UNEVICTABLE_FILE
+	default "262144"
+
+config UNEVICTABLE_FILE_KBYTES_MIN
+	int "Default value for vm.unevictable_file_kbytes_min"
+	depends on UNEVICTABLE_FILE
+	default "131072"
+
+config UNEVICTABLE_ANON
+	bool "Keep some anonymous pages under memory pressure"
+	depends on SYSCTL
+	def_bool y
+	help
+	  Keep some anonymous pages still mapped under memory pressure
+	  to avoid potential stalls that may occur due to swapping.
+
+	  The UNEVICTABLE_ANON_KBYTES_LOW value defines a threshold
+	  to throttle swapping of anonymous pages.
+	  The vm.unevictable_anon_kbytes_low sysctl knob is used to
+	  change the amount in the runtime (setting it to 0
+	  effectively disables this feature).
+
+	  Recommended value: 65536 for a typical desktop workload.
+
+	  The UNEVICTABLE_ANON_KBYTES_MIN value sets the amount of
+	  pages to keep as a hard limit.
+	  The vm.unevictable_anon_kbytes_min sysctl knob is used to
+	  change the amount in the runtime (setting it to 0
+	  effectively disables this feature).
+
+	  Recommended value: 32768 for a typical desktop workload.
+
+	  See also: Documentation/admin-guide/sysctl/vm.rst
+
+config UNEVICTABLE_ANON_KBYTES_LOW
+	int "Default value for vm.unevictable_anon_kbytes_low"
+	depends on UNEVICTABLE_ANON
+	default "65536"
+
+config UNEVICTABLE_ANON_KBYTES_MIN
+	int "Default value for vm.unevictable_anon_kbytes_min"
+	depends on UNEVICTABLE_ANON
+	default "32768"
+
 config SPARSEMEM
 	def_bool y
 	depends on (!SELECT_MEMORY_MODEL && ARCH_SPARSEMEM_ENABLE) || SPARSEMEM_MANUAL

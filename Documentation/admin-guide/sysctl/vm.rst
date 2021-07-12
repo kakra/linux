@@ -68,6 +68,10 @@ Currently, these files are in /proc/sys/vm:
 - stat_refresh
 - numa_stat
 - swappiness
+- unevictable_file_kbytes_low
+- unevictable_file_kbytes_min
+- unevictable_anon_kbytes_low
+- unevictable_anon_kbytes_min
 - unprivileged_userfaultfd
 - user_reserve_kbytes
 - vfs_cache_pressure
@@ -879,6 +883,56 @@ Set this to 1 to allow unprivileged users to use the userfaultfd system
 calls without any restrictions.
 
 The default value is 0.
+
+
+unevictable_file_kbytes_low
+===========================
+
+Keep some file pages still mapped under memory pressure to avoid potential
+disk thrashing that may occur due to evicting running executables code.
+This implements soft eviction throttling, and some file pages can still
+be discarded.
+
+Setting it to 0 effectively disables this feature.
+
+The default value is 256 MiB.
+
+
+unevictable_file_kbytes_min
+===========================
+
+Keep all file pages still mapped under memory pressure to avoid potential
+disk thrashing that may occur due to evicting running executables code.
+This is the hard limit.
+
+Setting it to 0 effectively disables this feature.
+
+The default value is 128 MiB.
+
+
+unevictable_anon_kbytes_low
+===========================
+
+Keep some anonymous pages still mapped under memory pressure to avoid
+potential stalls that may occur due to swapping.
+This implements soft swapping throttling, and some anonymous pages can
+still be swapped out.
+
+Setting it to 0 effectively disables this feature.
+
+The default value is 64 MiB.
+
+
+unevictable_anon_kbytes_min
+===========================
+
+Keep all anonymous pages still mapped under memory pressure to avoid
+potential stalls that may occur due to swapping.
+This is the hard limit.
+
+Setting it to 0 effectively disables this feature.
+
+The default value is 32 MiB.
 
 
 user_reserve_kbytes
