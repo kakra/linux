@@ -21,8 +21,7 @@ MODULE_VERSION(XPADNEO_VERSION);
 
 static u8 param_trigger_rumble_mode = 0;
 module_param_named(trigger_rumble_mode, param_trigger_rumble_mode, byte, 0644);
-MODULE_PARM_DESC(trigger_rumble_mode,
-		 "(u8) Trigger rumble mode. 0: pressure, 1: directional (deprecated), 2: disable.");
+MODULE_PARM_DESC(trigger_rumble_mode, "(u8) Trigger rumble mode. 0: pressure, 2: disable.");
 
 static u8 param_rumble_attenuation[2];
 module_param_array_named(rumble_attenuation, param_rumble_attenuation, byte, NULL, 0644);
@@ -136,6 +135,9 @@ static const struct usage_map xpadneo_usage_maps[] = {
 	/* fixup code "AC Back" from Linux report descriptor */
 	USAGE_MAP(0xC0224, MAP_STATIC, EV_KEY, BTN_SELECT),
 
+	/* map special buttons without HID bitmaps, corrected in event handler */
+	USAGE_MAP(0xC0081, MAP_STATIC, EV_KEY, BTN_PADDLES(0)),	/* Four paddles */
+
 	/* hardware features handled at the raw report level */
 	USAGE_IGN(0xC0085),	/* Profile switcher */
 	USAGE_IGN(0xC0099),	/* Trigger scale switches */
@@ -160,9 +162,6 @@ static const struct usage_map xpadneo_usage_maps[] = {
 	USAGE_IGN(0x9001D),	/* copy of LS */
 	USAGE_IGN(0x9001E),	/* copy of RS */
 	USAGE_IGN(0xC0082),	/* copy of Select button */
-
-	/* XBE2: Disable extra features until proper support is implemented */
-	USAGE_IGN(0xC0081),	/* Four paddles */
 
 	/* XBE2: Disable unused buttons */
 	USAGE_IGN(0x90012),	/* 6 "TRIGGER_HAPPY" buttons */
@@ -268,18 +267,10 @@ static void xpadneo_ff_worker(struct work_struct *work)
 #define update_magnitude(m, v) m = (v) > 0 ? max(m, v) : 0
 static int xpadneo_ff_play(struct input_dev *dev, void *data, struct ff_effect *effect)
 {
-	enum {
-		DIRECTION_DOWN = 0x0000UL,
-		DIRECTION_LEFT = 0x4000UL,
-		DIRECTION_UP = 0x8000UL,
-		DIRECTION_RIGHT = 0xC000UL,
-		QUARTER = DIRECTION_LEFT,
-	};
-
 	unsigned long flags, ff_run_at, ff_throttle_until;
 	long delay_work;
 	int fraction_TL, fraction_TR, fraction_MAIN, percent_TRIGGERS, percent_MAIN;
-	s32 weak, strong, direction, max_main;
+	s32 weak, strong, max_main;
 
 	struct hid_device *hdev = input_get_drvdata(dev);
 	struct xpadneo_devdata *xdata = hid_get_drvdata(hdev);
@@ -300,70 +291,16 @@ static int xpadneo_ff_play(struct input_dev *dev, void *data, struct ff_effect *
 	percent_TRIGGERS = percent_TRIGGERS * percent_MAIN / 100;
 
 	switch (param_trigger_rumble_mode) {
-	case PARAM_TRIGGER_RUMBLE_DIRECTIONAL:
-		/*
-		 * scale the main rumble lineary within each half of the cirlce,
-		 * so we can completely turn off the main rumble while still doing
-		 * trigger rumble alone
-		 */
-		direction = effect->direction;
-		if (direction <= DIRECTION_UP) {
-			/* scale the main rumbling between 0x0000..0x8000 (100%..0%) */
-			fraction_MAIN = ((DIRECTION_UP - direction) * percent_MAIN) / DIRECTION_UP;
-		} else {
-			/* scale the main rumbling between 0x8000..0xffff (0%..100%) */
-			fraction_MAIN = ((direction - DIRECTION_UP) * percent_MAIN) / DIRECTION_UP;
-		}
-
-		/*
-		 * scale the trigger rumble lineary within each quarter:
-		 *        _ _
-		 * LT = /     \
-		 * RT = _ / \ _
-		 *      1 2 3 4
-		 *
-		 * This gives us 4 different modes of operation (with smooth transitions)
-		 * to get a mostly somewhat independent control over each motor:
-		 *
-		 *                DOWN .. LEFT ..  UP  .. RGHT .. DOWN
-		 * left rumble  =   0% .. 100% .. 100% ..   0% ..   0%
-		 * right rumble =   0% ..   0% .. 100% .. 100% ..   0%
-		 * main rumble  = 100% ..  50% ..   0% ..  50% .. 100%
-		 *
-		 * For completely independent control, we'd need a sphere instead of a
-		 * circle but we only have one direction. We could decouple the
-		 * direction from the main rumble but that seems to be outside the spec
-		 * of the rumble protocol (direction without any magnitude should do
-		 * nothing).
-		 */
-		if (direction <= DIRECTION_LEFT) {
-			/* scale the left trigger between 0x0000..0x4000 (0%..100%) */
-			fraction_TL = (direction * percent_TRIGGERS) / QUARTER;
-			fraction_TR = 0;
-		} else if (direction <= DIRECTION_UP) {
-			/* scale the right trigger between 0x4000..0x8000 (0%..100%) */
-			fraction_TL = 100;
-			fraction_TR = ((direction - DIRECTION_LEFT) * percent_TRIGGERS) / QUARTER;
-		} else if (direction <= DIRECTION_RIGHT) {
-			/* scale the right trigger between 0x8000..0xC000 (100%..0%) */
-			fraction_TL = 100;
-			fraction_TR = ((DIRECTION_RIGHT - direction) * percent_TRIGGERS) / QUARTER;
-		} else {
-			/* scale the left trigger between 0xC000...0xFFFF (0..100%) */
-			fraction_TL =
-			    100 - ((direction - DIRECTION_RIGHT) * percent_TRIGGERS) / QUARTER;
-			fraction_TR = 0;
-		}
-		break;
-	case PARAM_TRIGGER_RUMBLE_PRESSURE:
-		fraction_MAIN = percent_MAIN;
-		fraction_TL = (xdata->last_abs_z * percent_TRIGGERS + 511) / 1023;
-		fraction_TR = (xdata->last_abs_rz * percent_TRIGGERS + 511) / 1023;
-		break;
-	default:
+	case PARAM_TRIGGER_RUMBLE_DISABLE:
 		fraction_MAIN = percent_MAIN;
 		fraction_TL = 0;
 		fraction_TR = 0;
+		break;
+	case PARAM_TRIGGER_RUMBLE_PRESSURE:
+	default:
+		fraction_MAIN = percent_MAIN;
+		fraction_TL = (xdata->last_abs_z * percent_TRIGGERS + 511) / 1023;
+		fraction_TR = (xdata->last_abs_rz * percent_TRIGGERS + 511) / 1023;
 		break;
 	}
 
@@ -860,15 +797,20 @@ static int xpadneo_raw_event(struct hid_device *hdev, struct hid_report *report,
 	}
 
 	/* XBE2: track the current controller settings */
-	if (report->id == 1 && reportsize >= 21) {
+	if (report->id == 1 && reportsize >= 20) {
 		if (reportsize == 55) {
 			hid_notice_once(hdev,
 					"detected broken XBE2 v1 packet format, please update the firmware");
 			xpadneo_switch_profile(xdata, data[35] & 0x03, false);
 			xpadneo_switch_triggers(xdata, data[36] & 0x0F);
-		} else {
+		} else if (reportsize >= 21) {
+			/* firmware 4.x style packet */
 			xpadneo_switch_profile(xdata, data[19] & 0x03, false);
 			xpadneo_switch_triggers(xdata, data[20] & 0x0F);
+		} else {
+			/* firmware 5.x style packet */
+			xpadneo_switch_profile(xdata, data[17] & 0x03, false);
+			xpadneo_switch_triggers(xdata, data[18] & 0x0F);
 		}
 	}
 
@@ -923,9 +865,14 @@ static int xpadneo_input_configured(struct hid_device *hdev, struct hid_input *h
 	/* combine triggers to form a rudder, use ABS_MISC to order after dpad */
 	input_set_abs_params(xdata->gamepad, ABS_MISC, -1023, 1023, 3, 63);
 
-	/* do not report the consumer control buttons as part of the gamepad */
-	__clear_bit(BTN_XBOX, xdata->gamepad->keybit);
+	/* do not report the keyboard buttons as part of the gamepad */
 	__clear_bit(BTN_SHARE, xdata->gamepad->keybit);
+
+	/* add paddles as part of the gamepad */
+	__set_bit(BTN_PADDLES(0), xdata->gamepad->keybit);
+	__set_bit(BTN_PADDLES(1), xdata->gamepad->keybit);
+	__set_bit(BTN_PADDLES(2), xdata->gamepad->keybit);
+	__set_bit(BTN_PADDLES(3), xdata->gamepad->keybit);
 
 	return 0;
 }
@@ -935,9 +882,18 @@ static int xpadneo_event(struct hid_device *hdev, struct hid_field *field,
 {
 	struct xpadneo_devdata *xdata = hid_get_drvdata(hdev);
 	struct input_dev *gamepad = xdata->gamepad;
-	struct input_dev *consumer = xdata->consumer;
+	struct input_dev *keyboard = xdata->keyboard;
 
-	if (usage->type == EV_ABS) {
+	if ((usage->type == EV_KEY) && (usage->code == BTN_PADDLES(0))) {
+		if (gamepad && xdata->profile == 0) {
+			/* report the paddles individually */
+			input_report_key(gamepad, BTN_PADDLES(0), value & 1 ? 1 : 0);
+			input_report_key(gamepad, BTN_PADDLES(1), value & 2 ? 1 : 0);
+			input_report_key(gamepad, BTN_PADDLES(2), value & 4 ? 1 : 0);
+			input_report_key(gamepad, BTN_PADDLES(3), value & 8 ? 1 : 0);
+		}
+		goto stop_processing;
+	} else if (usage->type == EV_ABS) {
 		switch (usage->code) {
 		case ABS_X:
 		case ABS_Y:
@@ -971,24 +927,22 @@ static int xpadneo_event(struct hid_device *hdev, struct hid_field *field,
 			xdata->xbox_button_down = false;
 			if (xdata->profile_switched) {
 				xdata->profile_switched = false;
-			} else if (consumer) {
+			} else {
 				/* replay cached event */
-				input_report_key(consumer, BTN_XBOX, 1);
-				input_sync(consumer);
+				input_report_key(gamepad, BTN_XBOX, 1);
+				input_sync(gamepad);
 				/* synthesize the release to remove the scan code */
-				input_report_key(consumer, BTN_XBOX, 0);
-				input_sync(consumer);
+				input_report_key(gamepad, BTN_XBOX, 0);
+				input_sync(gamepad);
 			}
 		}
-		if (!consumer)
-			goto consumer_missing;
 		goto stop_processing;
 	} else if ((usage->type == EV_KEY) && (usage->code == BTN_SHARE)) {
-		/* move the Share button to the consumer control device */
-		if (!consumer)
-			goto consumer_missing;
-		input_report_key(consumer, BTN_SHARE, value);
-		input_sync(consumer);
+		/* move the Share button to the keyboard device */
+		if (!keyboard)
+			goto keyboard_missing;
+		input_report_key(keyboard, BTN_SHARE, value);
+		input_sync(keyboard);
 		goto stop_processing;
 	} else if (xdata->xbox_button_down && (usage->type == EV_KEY)) {
 		if (!(xdata->quirks & XPADNEO_QUIRK_USE_HW_PROFILES)) {
@@ -1027,10 +981,10 @@ combine_z_axes:
 	}
 	return 0;
 
-consumer_missing:
-	if ((xdata->missing_reported && XPADNEO_MISSING_CONSUMER) == 0) {
-		xdata->missing_reported |= XPADNEO_MISSING_CONSUMER;
-		hid_err(hdev, "consumer control not detected\n");
+keyboard_missing:
+	if ((xdata->missing_reported && XPADNEO_MISSING_KEYBOARD) == 0) {
+		xdata->missing_reported |= XPADNEO_MISSING_KEYBOARD;
+		hid_err(hdev, "keyboard not detected\n");
 	}
 
 stop_processing:
@@ -1125,8 +1079,6 @@ static int xpadneo_probe(struct hid_device *hdev, const struct hid_device_id *id
 {
 	int ret;
 	struct xpadneo_devdata *xdata;
-	u16 product;
-	u32 version;
 
 	xdata = devm_kzalloc(&hdev->dev, sizeof(*xdata), GFP_KERNEL);
 	if (xdata == NULL)
@@ -1138,6 +1090,20 @@ static int xpadneo_probe(struct hid_device *hdev, const struct hid_device_id *id
 	xdata->hdev = hdev;
 	hdev->quirks |= HID_QUIRK_INPUT_PER_APP;
 	hid_set_drvdata(hdev, xdata);
+
+	if (hdev->version == 0x00000903)
+		hid_warn(hdev, "buggy firmware detected, please upgrade to the latest version\n");
+	else if (hdev->version < 0x00000500)
+		hid_warn(hdev,
+			 "classic Bluetooth firmware version %x.%02x, please upgrade for better stability\n",
+			 hdev->version >> 8, (u8)hdev->version);
+	else if (hdev->version < 0x00000512)
+		hid_warn(hdev,
+			 "BLE firmware version %x.%02x, please upgrade for better stability\n",
+			 hdev->version >> 8, (u8)hdev->version);
+	else
+		hid_info(hdev, "BLE firmware version %x.%02x\n",
+			 hdev->version >> 8, (u8)hdev->version);
 
 	/*
 	 * Pretend that we are in Windows pairing mode as we are actually
@@ -1159,36 +1125,28 @@ static int xpadneo_probe(struct hid_device *hdev, const struct hid_device_id *id
 	 * 0xB12 Dongle, USB Windows and USB Linux mode
 	 * 0xB13 wireless Linux mode (Android mode)
 	 *
+	 * Xbox Controller BLE mode:
+	 * 0xB20 wireless BLE mode
+	 *
 	 * TODO: We should find a better way of doing this so SDL2 could
 	 * still detect our driver as the correct model. Currently this
 	 * maps all controllers to the same model.
 	 */
-	product = hdev->product;
-	version = hdev->version;
-	switch (product) {
-	case 0x02E0:
-		hdev->version = 0x00000903;
-		break;
-	case 0x02FD:
-		hdev->product = 0x02E0;
-		break;
-	case 0x0B05:
-	case 0x0B13:
-		hdev->product = 0x02E0;
-		hdev->version = 0x00000903;
-		break;
-	}
+	xdata->original_product = hdev->product;
+	xdata->original_version = hdev->version;
+	hdev->product = 0x02FD;
+	hdev->version = 0x00001130;
 
-	if (hdev->product != product)
+	if (hdev->product != xdata->original_product)
 		hid_info(hdev,
 			 "pretending XB1S Windows wireless mode "
-			 "(changed PID from 0x%04X to 0x%04X)\n", product,
+			 "(changed PID from 0x%04X to 0x%04X)\n", xdata->original_product,
 			 hdev->product);
 
-	if (hdev->version != version)
+	if (hdev->version != xdata->original_version)
 		hid_info(hdev,
 			 "working around wrong SDL2 mappings "
-			 "(changed version from 0x%08X to 0x%08X)\n", version,
+			 "(changed version from 0x%08X to 0x%08X)\n", xdata->original_version,
 			 hdev->version);
 
 	ret = hid_parse(hdev);
@@ -1204,6 +1162,10 @@ static int xpadneo_probe(struct hid_device *hdev, const struct hid_device_id *id
 	}
 
 	ret = xpadneo_init_consumer(xdata);
+	if (ret)
+		return ret;
+
+	ret = xpadneo_init_keyboard(xdata);
 	if (ret)
 		return ret;
 
@@ -1237,6 +1199,22 @@ static void xpadneo_remove(struct hid_device *hdev)
 
 	hid_hw_close(hdev);
 
+	if (hdev->version != xdata->original_version) {
+		hid_info(hdev,
+			 "reverting to original version "
+			 "(changed version from 0x%08X to 0x%08X)\n",
+			 hdev->version, xdata->original_version);
+		hdev->version = xdata->original_version;
+	}
+
+	if (hdev->product != xdata->original_product) {
+		hid_info(hdev,
+			 "reverting to original product "
+			 "(changed PID from 0x%04X to 0x%04X)\n",
+			 hdev->product, xdata->original_product);
+		hdev->product = xdata->original_product;
+	}
+
 	cancel_delayed_work_sync(&xdata->ff_worker);
 
 	kfree(xdata->battery.name);
@@ -1253,11 +1231,15 @@ static const struct hid_device_id xpadneo_devices[] = {
 	/* XBOX ONE S / X */
 	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_MICROSOFT, 0x02FD) },
 	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_MICROSOFT, 0x02E0) },
+	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_MICROSOFT, 0x0B20),
+	 .driver_data = XPADNEO_QUIRK_SHARE_BUTTON },
 
 	/* XBOX ONE Elite Series 2 */
 	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_MICROSOFT, 0x0B05) },
+	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_MICROSOFT, 0x0B22),
+	 .driver_data = XPADNEO_QUIRK_SHARE_BUTTON },
 
-	/* XBOX Series X|S */
+	/* XBOX Series X|S / Xbox Wireless Controller (BLE) */
 	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_MICROSOFT, 0x0B13),
 	 .driver_data = XPADNEO_QUIRK_SHARE_BUTTON },
 
@@ -1285,7 +1267,7 @@ static int __init xpadneo_init(void)
 	dbg_hid("xpadneo:%s\n", __func__);
 
 	if (param_trigger_rumble_mode == 1)
-		pr_warn("hid-xpadneo trigger_rumble_mode=1 is deprecated\n");
+		pr_warn("hid-xpadneo trigger_rumble_mode=1 is unknown, defaulting to 0\n");
 
 	xpadneo_rumble_wq = alloc_ordered_workqueue("xpadneo/rumbled", WQ_HIGHPRI);
 	if (xpadneo_rumble_wq) {

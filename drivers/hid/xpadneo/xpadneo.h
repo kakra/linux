@@ -44,13 +44,14 @@ do { \
 } while (0)
 
 /* button aliases */
-#define BTN_SHARE KEY_RECORD
-#define BTN_XBOX  KEY_MODE
+#define BTN_PADDLES(b) (BTN_TRIGGER_HAPPY37+(b))
+#define BTN_SHARE      KEY_F12
+#define BTN_XBOX       BTN_MODE
 
 /* module parameter "trigger_rumble_mode" */
-#define PARAM_TRIGGER_RUMBLE_PRESSURE    0
-#define PARAM_TRIGGER_RUMBLE_DIRECTIONAL 1
-#define PARAM_TRIGGER_RUMBLE_DISABLE     2
+#define PARAM_TRIGGER_RUMBLE_PRESSURE 0
+#define PARAM_TRIGGER_RUMBLE_RESERVED 1
+#define PARAM_TRIGGER_RUMBLE_DISABLE  2
 
 /* module parameter "quirks" */
 #define XPADNEO_QUIRK_NO_PULSE          1
@@ -62,7 +63,7 @@ do { \
 #define XPADNEO_QUIRK_SHARE_BUTTON      64
 
 /* timing of rumble commands to work around firmware crashes */
-#define XPADNEO_RUMBLE_THROTTLE_DELAY   msecs_to_jiffies(10)
+#define XPADNEO_RUMBLE_THROTTLE_DELAY   msecs_to_jiffies(50)
 #define XPADNEO_RUMBLE_THROTTLE_JIFFIES (jiffies + XPADNEO_RUMBLE_THROTTLE_DELAY)
 
 /* rumble motors enable bits */
@@ -129,6 +130,10 @@ struct xpadneo_devdata {
 	struct input_dev *consumer, *gamepad, *keyboard;
 	short int missing_reported;
 
+	/* revert fixups on removal */
+	u16 original_product;
+	u32 original_version;
+
 	/* quirk flags */
 	unsigned int original_rsize;
 	u32 quirks;
@@ -175,6 +180,7 @@ struct xpadneo_devdata {
 };
 
 extern int xpadneo_init_consumer(struct xpadneo_devdata *);
+extern int xpadneo_init_keyboard(struct xpadneo_devdata *);
 extern int xpadneo_init_synthetic(struct xpadneo_devdata *, char *, struct input_dev **);
 
 #endif

@@ -128,6 +128,7 @@ obj-$(CONFIG_HID_LED)		+= hid-led.o
 obj-$(CONFIG_HID_XINMO)		+= hid-xinmo.o
 hid-xpadneo-objs		:= xpadneo/consumer.o \
 				   xpadneo/core.o \
+				   xpadneo/keyboard.o \
 				   xpadneo/legacy.o
 obj-$(CONFIG_HID_XPADNEO)	+= hid-xpadneo.o
 obj-$(CONFIG_HID_ZEROPLUS)	+= hid-zpff.o
