@@ -204,6 +204,7 @@ config ZEN_INTERACTIVE
 	  --- Virtual Memory Subsystem ---------------------------
 
 	    Background-reclaim hugepages...:   no   ->   yes
+	    Swap-in readahead..............:   3    ->   0
 
 	  --- EEVDF CPU Scheduler --------------------------------
 
