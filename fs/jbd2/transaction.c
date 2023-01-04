@@ -27,6 +27,7 @@
 #include <linux/bug.h>
 #include <linux/module.h>
 #include <linux/sched/mm.h>
+#include <linux/powerbump.h>
 
 #include <trace/events/jbd2.h>
 
@@ -1104,6 +1105,7 @@ repeat:
 	if (buffer_shadow(bh)) {
 		JBUFFER_TRACE(jh, "on shadow: sleep");
 		spin_unlock(&jh->b_state_lock);
+		give_power_bump(BUMP_FOR_DISK);
 		wait_on_bit_io(&bh->b_state, BH_Shadow, TASK_UNINTERRUPTIBLE);
 		goto repeat;
 	}

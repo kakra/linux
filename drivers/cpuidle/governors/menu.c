@@ -18,6 +18,7 @@
 #include <linux/sched/loadavg.h>
 #include <linux/sched/stat.h>
 #include <linux/math64.h>
+#include <linux/powerbump.h>
 
 #define BUCKETS 12
 #define INTERVAL_SHIFT 3
@@ -278,6 +279,9 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		menu_update(drv, dev);
 		data->needs_update = 0;
 	}
+
+	if (in_power_bump() && latency_req > BUMP_LATENCY_THRESHOLD) 
+		latency_req = BUMP_LATENCY_THRESHOLD;
 
 	/* determine the expected residency time, round up */
 	delta = tick_nohz_get_sleep_length(&delta_tick);

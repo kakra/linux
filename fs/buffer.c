@@ -48,6 +48,7 @@
 #include <linux/sched/mm.h>
 #include <trace/events/block.h>
 #include <linux/fscrypt.h>
+#include <linux/powerbump.h>
 
 #include "internal.h"
 
@@ -119,6 +120,7 @@ EXPORT_SYMBOL(buffer_check_dirty_writeback);
  */
 void __wait_on_buffer(struct buffer_head * bh)
 {
+	give_power_bump(BUMP_FOR_DISK);
 	wait_on_bit_io(&bh->b_state, BH_Lock, TASK_UNINTERRUPTIBLE);
 }
 EXPORT_SYMBOL(__wait_on_buffer);
@@ -156,6 +158,7 @@ static void __end_buffer_read_notouch(struct buffer_head *bh, int uptodate)
  */
 void end_buffer_read_sync(struct buffer_head *bh, int uptodate)
 {
+	give_power_bump(BUMP_FOR_DISK);
 	__end_buffer_read_notouch(bh, uptodate);
 	put_bh(bh);
 }
@@ -163,6 +166,7 @@ EXPORT_SYMBOL(end_buffer_read_sync);
 
 void end_buffer_write_sync(struct buffer_head *bh, int uptodate)
 {
+	give_power_bump(BUMP_FOR_DISK);
 	if (uptodate) {
 		set_buffer_uptodate(bh);
 	} else {
