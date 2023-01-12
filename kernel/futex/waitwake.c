@@ -3,6 +3,7 @@
 #include <linux/sched/task.h>
 #include <linux/sched/signal.h>
 #include <linux/freezer.h>
+#include <linux/powerbump.h>
 
 #include "futex.h"
 
@@ -336,6 +337,7 @@ void futex_wait_queue(struct futex_hash_bucket *hb, struct futex_q *q,
 	 */
 	set_current_state(TASK_INTERRUPTIBLE|TASK_FREEZABLE);
 	futex_queue(q, hb);
+	give_power_bump(BUMP_FOR_FUTEX);
 
 	/* Arm the timer */
 	if (timeout)
