@@ -25,6 +25,7 @@
 
 static DEFINE_MUTEX(itmt_update_mutex);
 DEFINE_PER_CPU_READ_MOSTLY(int, sched_core_priority);
+DEFINE_PER_CPU_READ_MOSTLY(int, sched_power_ratio);
 
 /* Boolean to track if system has ITMT capabilities */
 static bool __read_mostly sched_itmt_capable;
@@ -169,8 +170,18 @@ void sched_clear_itmt_support(void)
 
 int arch_asym_cpu_priority(int cpu)
 {
-	return per_cpu(sched_core_priority, cpu);
+	int power_ratio = per_cpu(sched_power_ratio, cpu);
+
+	/* a power ratio of 0 (uninitialized) is assumed to be maximum */
+	if (power_ratio == 0)
+		power_ratio = 256 - 2 * 6;
+	return per_cpu(sched_core_priority, cpu) * power_ratio / 256;
 }
+
+extern int best_core;
+extern int second_best_core;
+static int best_core_score;
+static int second_best_core_score;
 
 /**
  * sched_set_itmt_core_prio() - Set CPU priority based on ITMT
@@ -198,8 +209,38 @@ void sched_set_itmt_core_prio(int prio, int core_cpu)
 		 * of the priority chain and only used when
 		 * all other high priority cpus are out of capacity.
 		 */
-		smt_prio = prio * smp_num_siblings / i;
+		smt_prio = prio * smp_num_siblings / (i * i);
 		per_cpu(sched_core_priority, cpu) = smt_prio;
 		i++;
+
+		if (smt_prio > best_core_score) {
+			best_core = cpu;
+			best_core_score = smt_prio;
+		} else
+		if (smt_prio > second_best_core_score) {
+			second_best_core = cpu;
+			second_best_core_score = smt_prio;
+		}
+	}
+}
+
+/**
+ * sched_set_itmt_power_ratio() - Set CPU priority based on ITMT
+ * @power_ratio:	The power scaling ratio [1..256] for the core
+ * @core_cpu:		The cpu number associated with the core
+ *
+ * Set a scaling to the cpu performance based on long term power
+ * settings (like EPB).
+ *
+ * Note this is for the policy not for the actual dynamic frequency;
+ * the frequency will increase itself as workloads run on a core.
+ */
+
+void sched_set_itmt_power_ratio(int power_ratio, int core_cpu)
+{
+	int cpu;
+
+	for_each_cpu(cpu, topology_sibling_cpumask(core_cpu)) {
+		per_cpu(sched_power_ratio, cpu) = power_ratio;
 	}
 }
