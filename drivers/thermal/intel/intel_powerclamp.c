@@ -752,14 +752,13 @@ MODULE_DEVICE_TABLE(x86cpu, intel_powerclamp_ids);
 
 static int __init powerclamp_probe(void)
 {
-
-	if (x86_match_cpu(amd_cpu)){
-		pr_info("Intel PowerClamp does not support AMD CPUs\n");
+	if (!x86_match_cpu(intel_powerclamp_ids)) {
+		pr_info("CPU does not support MWAIT\n");
 		return -ENODEV;
 	}
 
-	if (!x86_match_cpu(intel_powerclamp_ids)) {
-		pr_err("CPU does not support MWAIT\n");
+	if (x86_match_cpu(amd_cpu)){
+		pr_info("Intel PowerClamp does not support AMD CPUs\n");
 		return -ENODEV;
 	}
 
