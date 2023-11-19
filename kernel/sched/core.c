@@ -8525,10 +8525,22 @@ SYSCALL_DEFINE3(sched_getaffinity, pid_t, pid, unsigned int, len,
 	return ret;
 }
 
+static DEFINE_PER_CPU(unsigned long, last_yield);
+
 static void do_sched_yield(void)
 {
 	struct rq_flags rf;
 	struct rq *rq;
+	int cpu = raw_smp_processor_id();
+
+	cond_resched();
+
+	/* rate limit yielding to something sensible */
+	
+	if (!time_after(jiffies, per_cpu(last_yield, cpu)))
+		return;
+	
+	per_cpu(last_yield, cpu) = jiffies;
 
 	rq = this_rq_lock_irq(&rf);
 
