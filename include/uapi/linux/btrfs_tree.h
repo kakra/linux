@@ -569,6 +569,8 @@ struct btrfs_node {
 #define BTRFS_DEV_ALLOCATION_METADATA_ONLY	(2ULL)
 /* only data chunk allowed */
 #define BTRFS_DEV_ALLOCATION_DATA_ONLY		(3ULL)
+/* preferred no chunk, but chunks allowed */
+#define BTRFS_DEV_ALLOCATION_PREFERRED_NONE	(4ULL)
 /* 5..7 are unused values */
 
 struct btrfs_dev_item {
