@@ -1309,6 +1309,7 @@ static const char * const btrfs_read_policy_name[] = {
 	"pid",
 #ifdef CONFIG_BTRFS_EXPERIMENTAL
 	"round-robin",
+	"latency",
 	"devid",
 #endif
 };
@@ -1324,7 +1325,7 @@ char *btrfs_get_mod_read_policy(void)
 /* Set perm 0, disable sys/module/btrfs/parameter/read_policy interface */
 module_param(read_policy, charp, 0);
 MODULE_PARM_DESC(read_policy,
-"Global read policy; pid (default), round-robin[:min_contig_read], devid[:devid]");
+"Global read policy; pid (default), round-robin[:min_contig_read], latency, devid[:devid]");
 #endif
 
 int btrfs_read_policy_to_enum(const char *str, s64 *value)

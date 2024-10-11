@@ -308,6 +308,8 @@ enum btrfs_read_policy {
 #ifdef CONFIG_BTRFS_EXPERIMENTAL
 	/* Balancing raid1 reads across all striped devices (round-robin) */
 	BTRFS_READ_POLICY_RR,
+	/* Use the lowest-latency device dynamically */
+	BTRFS_READ_POLICY_LATENCY,
 	/* Read from the specific device */
 	BTRFS_READ_POLICY_DEVID,
 #endif
