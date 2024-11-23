@@ -5,6 +5,7 @@
  */
 #include <linux/blkdev.h>
 #include <linux/ctype.h>
+#include <linux/delay.h>
 
 struct uuidcmp {
 	const char *uuid;
@@ -243,8 +244,18 @@ static int __init devt_from_devnum(const char *name, dev_t *devt)
  */
 int __init early_lookup_bdev(const char *name, dev_t *devt)
 {
-	if (strncmp(name, "PARTUUID=", 9) == 0)
-		return devt_from_partuuid(name + 9, devt);
+	if (strncmp(name, "PARTUUID=", 9) == 0) {
+		int res;
+		int  needtowait = 40<<1;
+		res = devt_from_partuuid(name + 9, devt);
+		if (!res) return res;
+		while (res && needtowait) {
+			msleep(500);
+			res = devt_from_partuuid(name + 9, devt);
+			needtowait--;
+		}
+		return res;
+	}
 	if (strncmp(name, "PARTLABEL=", 10) == 0)
 		return devt_from_partlabel(name + 10, devt);
 	if (strncmp(name, "/dev/", 5) == 0)

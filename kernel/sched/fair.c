@@ -190,7 +190,7 @@ static inline void update_load_set(struct load_weight *lw, unsigned long w)
  */
 static unsigned int get_update_sysctl_factor(void)
 {
-	unsigned int cpus = min_t(unsigned int, num_online_cpus(), 8);
+	unsigned int cpus = num_online_cpus();
 	unsigned int factor;
 
 	switch (sysctl_sched_tunable_scaling) {
@@ -12787,7 +12787,7 @@ static int sched_balance_newidle(struct rq *this_rq, struct rq_flags *rf)
 
 		update_next_balance(sd, &next_balance);
 
-		if (this_rq->avg_idle < curr_cost + sd->max_newidle_lb_cost)
+		if (this_rq->avg_idle/2 < curr_cost + sd->max_newidle_lb_cost)
 			break;
 
 		if (sd->flags & SD_BALANCE_NEWIDLE) {
