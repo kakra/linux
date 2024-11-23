@@ -367,6 +367,7 @@ static bool check_should_bypass(struct cached_dev *dc, struct bio *bio)
 	unsigned int sectors, congested;
 	struct task_struct *task = current;
 	struct io *i;
+	unsigned short ioprio;
 
 	if (test_bit(BCACHE_DEV_DETACHING, &dc->disk.flags) ||
 	    (bio_op(bio) == REQ_OP_DISCARD))
@@ -406,6 +407,16 @@ static bool check_should_bypass(struct cached_dev *dc, struct bio *bio)
 		if (!(bio->bi_opf & (REQ_META|REQ_PRIO)) &&
 		    (dc->cache_readahead_policy != BCH_CACHE_READA_ALL))
 			goto skip;
+	}
+
+	/* If process ioprio is lower-or-equal to dc->ioprio_bypass, and the
+	 * request is not REQ_META|REQ_PRIO, then hint for bypass. Note that a
+	 * lower-priority IO class+value has a greater numeric value. */
+	ioprio = bio_prio(bio);
+	if (!(bio->bi_opf & (REQ_META|REQ_PRIO))
+		&& ioprio_valid(ioprio) && ioprio_valid(dc->ioprio_writeback)
+		&& ioprio >= dc->ioprio_bypass) {
+		goto skip;
 	}
 
 	if (bio->bi_iter.bi_sector & (c->cache->sb.block_size - 1) ||
