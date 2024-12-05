@@ -592,7 +592,9 @@ struct btrfs_node {
 #define BTRFS_DEV_ALLOCATION_DATA_ONLY		(3ULL)
 /* preferred no chunk, but chunks allowed */
 #define BTRFS_DEV_ALLOCATION_PREFERRED_NONE	(4ULL)
-/* 5..7 are unused values */
+/* no chunks allowed */
+#define BTRFS_DEV_ALLOCATION_NONE_ONLY	        (5ULL)
+/* 6..7 are unused values */
 
 struct btrfs_dev_item {
 	/* the internal btrfs device id */
