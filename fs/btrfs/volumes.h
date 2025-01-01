@@ -308,6 +308,8 @@ enum btrfs_read_policy {
 #ifdef CONFIG_BTRFS_EXPERIMENTAL
 	/* Balancing raid1 reads across all striped devices (round-robin) */
 	BTRFS_READ_POLICY_RR,
+	/* Read from the specific device */
+	BTRFS_READ_POLICY_DEVID,
 #endif
 	BTRFS_NR_READ_POLICY,
 };
@@ -441,6 +443,9 @@ struct btrfs_fs_devices {
 #ifdef CONFIG_BTRFS_EXPERIMENTAL
 	/* Min contiguous reads before switching to next device. */
 	int rr_min_contig_read;
+
+	/* Device to be used for reading in case of RAID1. */
+	u64 read_devid;
 #endif
 
 #ifdef CONFIG_BTRFS_DEBUG
