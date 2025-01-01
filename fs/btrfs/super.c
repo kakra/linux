@@ -2468,6 +2468,9 @@ static __cold void btrfs_interface_exit(void)
 static int __init btrfs_print_mod_info(void)
 {
 	static const char options[] = ""
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+			", experimental=on"
+#endif
 #ifdef CONFIG_BTRFS_DEBUG
 			", debug=on"
 #endif
