@@ -7678,7 +7678,7 @@ int btrfs_init_dev_stats(struct btrfs_fs_info *fs_info)
 	list_for_each_entry(device, &fs_devices->devices, dev_list) {
 		ret = btrfs_device_init_dev_stats(device, path);
 		if (ret)
-			goto out;
+			return ret;
 	}
 	list_for_each_entry(seed_devs, &fs_devices->seed_list, seed_list) {
 		list_for_each_entry(device, &seed_devs->devices, dev_list) {

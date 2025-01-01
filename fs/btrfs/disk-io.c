@@ -1259,6 +1259,7 @@ void btrfs_free_fs_info(struct btrfs_fs_info *fs_info)
 {
 	struct percpu_counter *em_counter = &fs_info->evictable_extent_maps;
 
+	percpu_counter_destroy(&fs_info->stats_read_blocks);
 	percpu_counter_destroy(&fs_info->dirty_metadata_bytes);
 	percpu_counter_destroy(&fs_info->delalloc_bytes);
 	percpu_counter_destroy(&fs_info->ordered_bytes);
@@ -2855,6 +2856,10 @@ static int init_mount_fs_info(struct btrfs_fs_info *fs_info, struct super_block 
 	spin_lock_init(&fs_info->extent_map_shrinker_lock);
 
 	ret = percpu_counter_init(&fs_info->dirty_metadata_bytes, 0, GFP_KERNEL);
+	if (ret)
+		return ret;
+
+	ret = percpu_counter_init(&fs_info->stats_read_blocks, 0, GFP_KERNEL);
 	if (ret)
 		return ret;
 
