@@ -6098,21 +6098,22 @@ static int btrfs_read_rr(struct btrfs_chunk_map *map, int first, int num_stripe)
 	unsigned int read_cycle;
 	unsigned int total_reads;
 	unsigned int min_reads_per_dev;
+	int count_stripes = 0;
 
 	total_reads = percpu_counter_sum(&fs_info->stats_read_blocks);
 	min_reads_per_dev = READ_ONCE(fs_info->fs_devices->rr_min_contig_read) >>
 						       fs_info->sectorsize_bits;
 
-	for (int index = 0, i = first; i < first + num_stripe; i++) {
-		stripes[index].devid = map->stripes[i].dev->devid;
-		stripes[index].num = i;
-		index++;
+	for (int i = first; i < first + num_stripe; i++) {
+		stripes[count_stripes].devid = map->stripes[i].dev->devid;
+		stripes[count_stripes].num = i;
+		count_stripes++;
 	}
-	sort(stripes, num_stripe, sizeof(struct stripe_mirror),
+	sort(stripes, count_stripes, sizeof(struct stripe_mirror),
 	     btrfs_cmp_devid, NULL);
 
 	read_cycle = total_reads / min_reads_per_dev;
-	return stripes[read_cycle % num_stripe].num;
+	return stripes[read_cycle % count_stripes].num;
 }
 #endif
 
