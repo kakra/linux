@@ -6007,15 +6007,26 @@ static int btrfs_read_preferred(struct btrfs_chunk_map *map, int first,
 	return first;
 }
 
-static int btrfs_best_stripe(struct btrfs_fs_info *fs_info,
-			     struct btrfs_chunk_map *map, int first,
-			     int num_stripe)
+/*
+ * btrfs_best_stripe
+ *
+ * Select a stripe for reading using the average latency:
+ *
+ * 1. Compute the average latency of the device by dividing total latency
+ *    by number of IOs.
+ * 2. Store minimum latency and selected stripe in best_wait / best_stripe.
+ *
+ * Will always find at least one stripe.
+ */
+static void btrfs_best_stripe(struct btrfs_fs_info *fs_info,
+                              struct btrfs_chunk_map *map, int first,
+                              int num_stripes, u64 *best_wait, int *best_stripe)
 {
-	u64 best_wait = U64_MAX;
-	int best_stripe = 0;
 	int index;
+	*best_wait = U64_MAX;
+	*best_stripe = 0;
 
-	for (index = first; index < first + num_stripe; index++) {
+	for (index = first; index < first + num_stripes; index++) {
 		u64 read_wait;
 		u64 avg_wait = 0;
 		unsigned long read_ios;
@@ -6027,11 +6038,22 @@ static int btrfs_best_stripe(struct btrfs_fs_info *fs_info,
 		if (read_wait && read_ios && read_wait >= read_ios)
 			avg_wait = div_u64(read_wait, read_ios);
 
-		if (best_wait > avg_wait) {
-			best_wait = avg_wait;
-			best_stripe = index;
+		if (*best_wait > avg_wait) {
+			*best_wait = avg_wait;
+			*best_stripe = index;
 		}
 	}
+}
+
+static int btrfs_read_fastest(struct btrfs_fs_info *fs_info,
+                              struct btrfs_chunk_map *map, int first,
+                              int num_stripes)
+{
+	u64 best_wait;
+	int best_stripe;
+
+	btrfs_best_stripe(fs_info, map, first, num_stripes, &best_wait,
+	                  &best_stripe);
 
 	return best_stripe;
 }
@@ -6131,7 +6153,7 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 		preferred_mirror = btrfs_read_preferred(map, first, num_stripes);
 		break;
 	case BTRFS_READ_POLICY_LATENCY:
-		preferred_mirror = btrfs_best_stripe(fs_info, map, first,
+		preferred_mirror = btrfs_read_fastest(fs_info, map, first,
 								num_stripes);
 		break;
 #endif
