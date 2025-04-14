@@ -6094,7 +6094,8 @@ static int btrfs_cmp_devid(const void *a, const void *b)
  * The calculated stripe index is then used to select the corresponding device
  * from the list of devices, which is ordered by devid.
  */
-static int btrfs_read_rr(struct btrfs_chunk_map *map, int first, int num_stripe)
+static int btrfs_read_rr(struct btrfs_chunk_map *map, int first, int num_stripes,
+                         u64 min_latency)
 {
 	struct stripe_mirror stripes[BTRFS_RAID1_MAX_MIRRORS] = { 0 };
 	struct btrfs_device *device  = map->stripes[first].dev;
@@ -6108,11 +6109,24 @@ static int btrfs_read_rr(struct btrfs_chunk_map *map, int first, int num_stripe)
 	min_reads_per_dev = READ_ONCE(fs_info->fs_devices->rr_min_contig_read) >>
 						       fs_info->sectorsize_bits;
 
-	for (int i = first; i < first + num_stripe; i++) {
+	for (int i = first; i < first + num_stripes; i++) {
+		if (min_latency > 0) {
+			u64 avg_wait = btrfs_device_read_latency(map->stripes[i].dev);
+			if (min_latency < avg_wait)
+				continue;
+		}
+
 		stripes[count_stripes].devid = map->stripes[i].dev->devid;
 		stripes[count_stripes].num = i;
 		count_stripes++;
 	}
+
+	/* if the caller passed a minimum latency and we filtered for no
+	 * stripes, return -1 to indicate that no stripe qualified.
+	 */
+	if (unlikely(min_latency && !count_stripes))
+		return -1;
+
 	sort(stripes, count_stripes, sizeof(struct stripe_mirror),
 	     btrfs_cmp_devid, NULL);
 
@@ -6152,7 +6166,7 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 		break;
 #ifdef CONFIG_BTRFS_EXPERIMENTAL
 	case BTRFS_READ_POLICY_RR:
-		preferred_mirror = btrfs_read_rr(map, first, num_stripes);
+		preferred_mirror = btrfs_read_rr(map, first, num_stripes, 0);
 		break;
 	case BTRFS_READ_POLICY_DEVID:
 		preferred_mirror = btrfs_read_preferred(map, first, num_stripes);
