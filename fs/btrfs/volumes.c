@@ -6008,13 +6008,28 @@ static int btrfs_read_preferred(struct btrfs_chunk_map *map, int first,
 }
 
 /*
+ * btrfs_device_read_latency
+ *
+ * Compute the average latency of the device by dividing total latency by
+ * number of IOs.
+ */
+static u64 btrfs_device_read_latency(struct btrfs_device *device)
+{
+	u64 read_wait = part_stat_read(device->bdev, nsecs[READ]);
+	unsigned long read_ios = part_stat_read(device->bdev, ios[READ]);
+	u64 avg_wait = 0;
+
+	if (read_wait && read_ios && read_wait >= read_ios)
+		avg_wait = div_u64(read_wait, read_ios);
+
+	return avg_wait;
+}
+
+/*
  * btrfs_best_stripe
  *
  * Select a stripe for reading using the average latency:
- *
- * 1. Compute the average latency of the device by dividing total latency
- *    by number of IOs.
- * 2. Store minimum latency and selected stripe in best_wait / best_stripe.
+ * Store minimum latency and selected stripe in best_wait / best_stripe.
  *
  * Will always find at least one stripe.
  */
@@ -6022,22 +6037,11 @@ static void btrfs_best_stripe(struct btrfs_fs_info *fs_info,
                               struct btrfs_chunk_map *map, int first,
                               int num_stripes, u64 *best_wait, int *best_stripe)
 {
-	int index;
 	*best_wait = U64_MAX;
 	*best_stripe = 0;
 
-	for (index = first; index < first + num_stripes; index++) {
-		u64 read_wait;
-		u64 avg_wait = 0;
-		unsigned long read_ios;
-		struct btrfs_device *device = map->stripes[index].dev;
-
-		read_wait = part_stat_read(device->bdev, nsecs[READ]);
-		read_ios = part_stat_read(device->bdev, ios[READ]);
-
-		if (read_wait && read_ios && read_wait >= read_ios)
-			avg_wait = div_u64(read_wait, read_ios);
-
+	for (int index = first; index < first + num_stripes; index++) {
+		u64 avg_wait = btrfs_device_read_latency(map->stripes[index].dev);
 		if (*best_wait > avg_wait) {
 			*best_wait = avg_wait;
 			*best_stripe = index;
