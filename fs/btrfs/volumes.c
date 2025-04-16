@@ -6190,6 +6190,13 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	else
 		num_stripes = map->num_stripes;
 
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+	/* age each possible stripe by 1 IO */
+	for (int i = first; i < first + num_stripes; i++) {
+		atomic64_inc(&map->stripes[i].dev->last_io_age);
+	}
+#endif
+
 	switch (policy) {
 	default:
 		/* Shouldn't happen, just warn and use pid instead of failing */
@@ -6233,13 +6240,21 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	for (tolerance = 0; tolerance < 2; tolerance++) {
 		if (map->stripes[preferred_mirror].dev->bdev &&
 		    (tolerance || map->stripes[preferred_mirror].dev != srcdev))
-			return preferred_mirror;
+			goto out;
 		for (i = first; i < first + num_stripes; i++) {
 			if (map->stripes[i].dev->bdev &&
-			    (tolerance || map->stripes[i].dev != srcdev))
-				return i;
+			    (tolerance || map->stripes[i].dev != srcdev)) {
+				preferred_mirror = i;
+				goto out;
+			}
 		}
 	}
+
+out:
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+	/* reset age of selected stripe */
+	atomic64_set(&map->stripes[preferred_mirror].dev->last_io_age, 0);
+#endif
 
 	/* we couldn't find one that doesn't fail.  Just return something
 	 * and the io error handling code will clean up eventually

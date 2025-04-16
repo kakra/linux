@@ -197,6 +197,11 @@ struct btrfs_device {
 
 	/* Bandwidth limit for scrub, in bytes */
 	u64 scrub_speed_max;
+
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+	/* store an age of last read access */
+	atomic64_t last_io_age;
+#endif
 };
 
 /*
