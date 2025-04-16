@@ -6013,13 +6013,16 @@ static int btrfs_read_preferred(struct btrfs_chunk_map *map, int first,
  * Compute the average latency of the device by dividing total latency by
  * number of IOs.
  */
+#define BTRFS_MAX_AGE_FOR_VALID_LATENCY 1000
 static u64 btrfs_device_read_latency(struct btrfs_device *device)
 {
 	u64 read_wait = part_stat_read(device->bdev, nsecs[READ]);
 	unsigned long read_ios = part_stat_read(device->bdev, ios[READ]);
+	u64 last_io_age = (u64)atomic64_read(&device->last_io_age);
 	u64 avg_wait = 0;
 
-	if (read_wait && read_ios && read_wait >= read_ios)
+	if (last_io_age < BTRFS_MAX_AGE_FOR_VALID_LATENCY
+	    && read_wait && read_ios && read_wait >= read_ios)
 		avg_wait = div_u64(read_wait, read_ios);
 
 	return avg_wait;
