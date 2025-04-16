@@ -10,6 +10,9 @@
 #include <linux/completion.h>
 #include <linux/bug.h>
 #include <linux/list.h>
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#include <linux/part_stat.h>
+#endif
 #include <crypto/hash.h>
 #include "messages.h"
 #include "ctree.h"
@@ -2176,12 +2179,33 @@ abort:
 }
 BTRFS_ATTR_RW(devid, type, btrfs_devinfo_type_show, btrfs_devinfo_type_store);
 
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+static ssize_t btrfs_devinfo_read_stats_show(struct kobject *kobj,
+                                                       struct kobj_attribute *a, char *buf)
+{
+	struct btrfs_device *device = container_of(kobj, struct btrfs_device,
+						   devid_kobj);
+	u64 read_wait = part_stat_read(device->bdev, nsecs[READ]);
+	unsigned long read_ios = part_stat_read(device->bdev, ios[READ]);
+
+	u64 avg_wait = 0;
+	if (read_wait && read_ios && read_wait >= read_ios)
+		avg_wait = div_u64(read_wait, read_ios);
+
+	return scnprintf(buf, PAGE_SIZE, "ios %lu wait %llu avg %llu\n", read_ios, read_wait, avg_wait);
+}
+BTRFS_ATTR(devid, read_stats, btrfs_devinfo_read_stats_show);
+#endif
+
 /*
  * Information about one device.
  *
  * Path: /sys/fs/btrfs/<uuid>/devinfo/<devid>/
  */
 static struct attribute *devid_attrs[] = {
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+	BTRFS_ATTR_PTR(devid, read_stats),
+#endif
 	BTRFS_ATTR_PTR(devid, error_stats),
 	BTRFS_ATTR_PTR(devid, fsid),
 	BTRFS_ATTR_PTR(devid, in_fs_metadata),
