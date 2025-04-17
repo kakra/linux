@@ -6021,7 +6021,7 @@ static u64 btrfs_device_read_latency(struct btrfs_device *device)
 	u64 last_io_age = (u64)atomic64_read(&device->last_io_age);
 	u64 avg_wait = 0;
 
-	if (last_io_age < BTRFS_MAX_AGE_FOR_VALID_LATENCY
+	if (last_io_age >= 0 && last_io_age < BTRFS_MAX_AGE_FOR_VALID_LATENCY
 	    && read_wait && read_ios && read_wait >= read_ios)
 		avg_wait = div_u64(read_wait, read_ios);
 
@@ -6174,6 +6174,7 @@ static int btrfs_read_fastest_rr(struct btrfs_fs_info *fs_info,
 }
 #endif
 
+#define BTRFS_OLD_AGE_IO_BURST 20
 static int find_live_mirror(struct btrfs_fs_info *fs_info,
 			    struct btrfs_chunk_map *map, int first,
 			    int dev_replace_is_ongoing)
@@ -6256,7 +6257,18 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 out:
 #ifdef CONFIG_BTRFS_EXPERIMENTAL
 	/* reset age of selected stripe */
-	atomic64_set(&map->stripes[preferred_mirror].dev->last_io_age, 0);
+	s64 current_age, new_age;
+	do {
+		current_age = atomic64_read(&map->stripes[preferred_mirror].dev->last_io_age);
+
+		if (current_age >= BTRFS_MAX_AGE_FOR_VALID_LATENCY) {
+			new_age = -BTRFS_OLD_AGE_IO_BURST;
+		} else if (current_age >= 0) {
+			new_age = 0;
+		} else {
+			return preferred_mirror;
+		}
+	} while (unlikely(atomic64_cmpxchg(&map->stripes[preferred_mirror].dev->last_io_age, current_age, new_age) != current_age));
 #endif
 
 	/* we couldn't find one that doesn't fail.  Just return something

@@ -2192,9 +2192,9 @@ static ssize_t btrfs_devinfo_read_stats_show(struct kobject *kobj,
 	if (read_wait && read_ios && read_wait >= read_ios)
 		avg_wait = div_u64(read_wait, read_ios);
 
-	return scnprintf(buf, PAGE_SIZE, "ios %lu wait %llu avg %llu age %llu\n",
+	return scnprintf(buf, PAGE_SIZE, "ios %lu wait %llu avg %llu age %lld\n",
 	                 read_ios, read_wait, avg_wait,
-	                 (u64)atomic64_read(&device->last_io_age));
+	                 atomic64_read(&device->last_io_age));
 }
 BTRFS_ATTR(devid, read_stats, btrfs_devinfo_read_stats_show);
 #endif
