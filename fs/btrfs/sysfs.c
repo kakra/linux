@@ -1310,6 +1310,7 @@ static const char * const btrfs_read_policy_name[] = {
 #ifdef CONFIG_BTRFS_EXPERIMENTAL
 	"round-robin",
 	"latency",
+	"latency-rr",
 	"devid",
 #endif
 };
@@ -1325,7 +1326,7 @@ char *btrfs_get_mod_read_policy(void)
 /* Set perm 0, disable sys/module/btrfs/parameter/read_policy interface */
 module_param(read_policy, charp, 0);
 MODULE_PARM_DESC(read_policy,
-"Global read policy; pid (default), round-robin[:min_contig_read], latency, devid[:devid]");
+"Global read policy; pid (default), round-robin[:min_contig_read], latency, latency-rr[:min_contig_read], devid[:devid]");
 #endif
 
 int btrfs_read_policy_to_enum(const char *str, s64 *value)
@@ -1383,6 +1384,10 @@ static ssize_t btrfs_read_policy_show(struct kobject *kobj,
 		ret += sysfs_emit_at(buf, ret, "%s", btrfs_read_policy_name[i]);
 
 #ifdef CONFIG_BTRFS_EXPERIMENTAL
+		if (i == BTRFS_READ_POLICY_LATENCY_RR)
+			ret += sysfs_emit_at(buf, ret, ":%d",
+				 READ_ONCE(fs_devices->rr_min_contig_read));
+
 		if (i == BTRFS_READ_POLICY_RR)
 			ret += sysfs_emit_at(buf, ret, ":%d",
 				 READ_ONCE(fs_devices->rr_min_contig_read));
@@ -1418,7 +1423,11 @@ static ssize_t btrfs_read_policy_store(struct kobject *kobj,
 	    index != BTRFS_READ_POLICY_RR)
 		fs_devices->fs_stats = false;
 
-	if (index == BTRFS_READ_POLICY_RR) {
+	if (fs_devices->read_policy == BTRFS_READ_POLICY_LATENCY_RR &&
+	    index != BTRFS_READ_POLICY_LATENCY_RR)
+		fs_devices->fs_stats = false;
+
+	if ((index == BTRFS_READ_POLICY_RR) || (index == BTRFS_READ_POLICY_LATENCY_RR)) {
 		if (value != -1) {
 			u32 sectorsize = fs_devices->fs_info->sectorsize;
 

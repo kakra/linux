@@ -310,6 +310,8 @@ enum btrfs_read_policy {
 	BTRFS_READ_POLICY_RR,
 	/* Use the lowest-latency device dynamically */
 	BTRFS_READ_POLICY_LATENCY,
+	/* Use hybrid approach of lowest-latency and round-robin */
+	BTRFS_READ_POLICY_LATENCY_RR,
 	/* Read from the specific device */
 	BTRFS_READ_POLICY_DEVID,
 #endif

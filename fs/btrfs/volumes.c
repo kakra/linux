@@ -6133,6 +6133,42 @@ static int btrfs_read_rr(struct btrfs_chunk_map *map, int first, int num_stripes
 	read_cycle = total_reads / min_reads_per_dev;
 	return stripes[read_cycle % count_stripes].num;
 }
+
+/*
+ * btrfs_read_fastest_rr.
+ *
+ * Select a stripe for reading using a hybrid algorithm:
+ *
+ *  1. Determine the fastest stripe using btrfs_best_stripe.
+ *  2. Add 20% headroom to the selected latency.
+ *  3. Select a stripe using btrfs_read_rr filtered by latency.
+ */
+static int btrfs_read_fastest_rr(struct btrfs_fs_info *fs_info,
+                                 struct btrfs_chunk_map *map, int first,
+                                 int num_stripes)
+{
+	u64 min_latency;
+	int ret_stripe = -1;
+
+	/* find the lowest latency of all stripes first */
+	btrfs_best_stripe(fs_info, map, first, num_stripes, &min_latency,
+	                     &ret_stripe);
+
+	/* min_latency will be 0 if no latency has been recorded yet,
+	 * add 25% headroom otherwise, and round-robin among the fast
+	 * stripes only.
+	 */
+	if (likely(min_latency)) {
+		min_latency += (min_latency >> 2);
+		ret_stripe = btrfs_read_rr(map, first, num_stripes, min_latency);
+	}
+
+	/* retry with default round-robin if no stripe has been found */
+	if (unlikely(ret_stripe < 0))
+		ret_stripe = btrfs_read_rr(map, first, num_stripes, 0);
+
+	return ret_stripe;
+}
 #endif
 
 static int find_live_mirror(struct btrfs_fs_info *fs_info,
@@ -6174,6 +6210,10 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	case BTRFS_READ_POLICY_LATENCY:
 		preferred_mirror = btrfs_read_fastest(fs_info, map, first,
 								num_stripes);
+		break;
+	case BTRFS_READ_POLICY_LATENCY_RR:
+		preferred_mirror = btrfs_read_fastest_rr(fs_info, map, first,
+		                                         num_stripes);
 		break;
 #endif
 	}
