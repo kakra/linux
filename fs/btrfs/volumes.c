@@ -6269,6 +6269,7 @@ out:
 
 		current_age = atomic64_read(&pref_dev->last_io_age);
 		if (current_age >= BTRFS_MAX_AGE_FOR_VALID_LATENCY) {
+			atomic64_inc(&pref_dev->checkpoints);
 			atomic64_set(&pref_dev->last_io_age, -BTRFS_OLD_AGE_IO_BURST);
 			atomic64_set(&pref_dev->last_nsecs_read, part_stat_read(pref_dev->bdev, nsecs[READ]));
 			atomic64_set(&pref_dev->last_ios_read, part_stat_read(pref_dev->bdev, ios[READ]));

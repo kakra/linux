@@ -2186,15 +2186,26 @@ static ssize_t btrfs_devinfo_read_stats_show(struct kobject *kobj,
 	struct btrfs_device *device = container_of(kobj, struct btrfs_device,
 						   devid_kobj);
 	u64 read_wait = part_stat_read(device->bdev, nsecs[READ]);
+	u64 last_nsecs_read = (u64)atomic64_read(&device->last_nsecs_read);
 	unsigned long read_ios = part_stat_read(device->bdev, ios[READ]);
+	unsigned long last_ios_read = (unsigned long)atomic64_read(&device->last_ios_read);
+	s64 delta_read_wait = read_wait - last_nsecs_read;
+	long delta_read_ios = read_ios - last_ios_read;
+	u64 avg_wait = 0, delta_avg_wait = 0;
 
-	u64 avg_wait = 0;
 	if (read_wait && read_ios && read_wait >= read_ios)
 		avg_wait = div_u64(read_wait, read_ios);
 
-	return scnprintf(buf, PAGE_SIZE, "ios %lu wait %llu avg %llu age %lld\n",
+	if (delta_read_wait > 0 && delta_read_ios > 0 && delta_read_wait >= delta_read_ios)
+		delta_avg_wait = div_u64(delta_read_wait, delta_read_ios);
+
+	return scnprintf(buf, PAGE_SIZE,
+	                 "cumulative ios %lu wait %llu avg %llu "
+	                 "checkpoint ios %ld wait %lld avg %llu "
+	                 "age %lld count %llu\n",
 	                 read_ios, read_wait, avg_wait,
-	                 atomic64_read(&device->last_io_age));
+	                 delta_read_ios, delta_read_wait, delta_avg_wait,
+	                 atomic64_read(&device->last_io_age), atomic64_read(&device->checkpoints));
 }
 BTRFS_ATTR(devid, read_stats, btrfs_devinfo_read_stats_show);
 #endif
