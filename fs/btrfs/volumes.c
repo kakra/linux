@@ -6013,7 +6013,7 @@ static int btrfs_read_preferred(struct btrfs_chunk_map *map, int first,
  * Compute the average latency of the device by dividing total latency by
  * number of IOs.
  */
-#define BTRFS_MAX_AGE_FOR_VALID_LATENCY 10000
+#define BTRFS_DEVICE_LATENCY_CHECKPOINT_AGE 10000
 static u64 btrfs_device_read_latency(struct btrfs_device *device)
 {
 	u64 read_wait = part_stat_read(device->bdev, nsecs[READ]);
@@ -6025,7 +6025,7 @@ static u64 btrfs_device_read_latency(struct btrfs_device *device)
 	s64 delta_read_wait = read_wait - last_nsecs_read;
 	s64 delta_read_ios = read_ios - last_ios_read;
 
-	if (last_io_age >= 0 && last_io_age < BTRFS_MAX_AGE_FOR_VALID_LATENCY
+	if (last_io_age >= 0 && last_io_age < BTRFS_DEVICE_LATENCY_CHECKPOINT_AGE
 	    && delta_read_wait > 0 && delta_read_ios > 0 && delta_read_wait >= delta_read_ios)
 		avg_wait = div_u64(delta_read_wait, delta_read_ios);
 
@@ -6178,7 +6178,7 @@ static int btrfs_read_fastest_rr(struct btrfs_fs_info *fs_info,
 }
 #endif
 
-#define BTRFS_OLD_AGE_IO_BURST 100
+#define BTRFS_DEVICE_LATENCY_CHECKPOINT_BURST_IO 100
 static int find_live_mirror(struct btrfs_fs_info *fs_info,
 			    struct btrfs_chunk_map *map, int first,
 			    int dev_replace_is_ongoing)
@@ -6268,9 +6268,9 @@ out:
 		spin_lock(&pref_dev->latency_lock);
 
 		current_age = atomic64_read(&pref_dev->last_io_age);
-		if (current_age >= BTRFS_MAX_AGE_FOR_VALID_LATENCY) {
+		if (current_age >= BTRFS_DEVICE_LATENCY_CHECKPOINT_AGE) {
 			atomic64_inc(&pref_dev->checkpoints);
-			atomic64_set(&pref_dev->last_io_age, -BTRFS_OLD_AGE_IO_BURST);
+			atomic64_set(&pref_dev->last_io_age, -BTRFS_DEVICE_LATENCY_CHECKPOINT_BURST_IO);
 			atomic64_set(&pref_dev->last_nsecs_read, part_stat_read(pref_dev->bdev, nsecs[READ]));
 			atomic64_set(&pref_dev->last_ios_read, part_stat_read(pref_dev->bdev, ios[READ]));
 		} else if (current_age >= 0) {
