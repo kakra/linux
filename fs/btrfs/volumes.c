@@ -6202,6 +6202,7 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	/* age each possible stripe by 1 IO */
 	for (int i = first; i < first + num_stripes; i++) {
 		atomic64_inc(&map->stripes[i].dev->last_io_age);
+		atomic64_inc(&map->stripes[i].dev->stripe_ignored);
 	}
 #endif
 
@@ -6273,9 +6274,10 @@ out:
 			atomic64_set(&pref_dev->last_io_age, -BTRFS_DEVICE_LATENCY_CHECKPOINT_BURST_IO);
 			atomic64_set(&pref_dev->last_nsecs_read, part_stat_read(pref_dev->bdev, nsecs[READ]));
 			atomic64_set(&pref_dev->last_ios_read, part_stat_read(pref_dev->bdev, ios[READ]));
-		} else if (current_age >= 0) {
+		} else if (current_age > 0) {
 			atomic64_set(&pref_dev->last_io_age, 0);
 		}
+		atomic64_dec(&pref_dev->stripe_ignored);
 
 		spin_unlock(&pref_dev->latency_lock);
 	} while (0);

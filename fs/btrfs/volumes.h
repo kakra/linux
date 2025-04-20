@@ -202,6 +202,7 @@ struct btrfs_device {
 	/* store an age of last read access */
 	atomic64_t last_io_age;
 	atomic64_t checkpoints;
+	atomic64_t stripe_ignored;
 
 	/* lock while updating values */
 	spinlock_t latency_lock;

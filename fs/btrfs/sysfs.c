@@ -2202,10 +2202,11 @@ static ssize_t btrfs_devinfo_read_stats_show(struct kobject *kobj,
 	return scnprintf(buf, PAGE_SIZE,
 	                 "cumulative ios %lu wait %llu avg %llu "
 	                 "checkpoint ios %ld wait %lld avg %llu "
-	                 "age %lld count %llu\n",
+	                 "age %lld count %llu ignored %lld\n",
 	                 read_ios, read_wait, avg_wait,
 	                 delta_read_ios, delta_read_wait, delta_avg_wait,
-	                 atomic64_read(&device->last_io_age), atomic64_read(&device->checkpoints));
+	                 atomic64_read(&device->last_io_age), atomic64_read(&device->checkpoints),
+	                 atomic64_read(&device->stripe_ignored));
 }
 BTRFS_ATTR(devid, read_stats, btrfs_devinfo_read_stats_show);
 #endif
