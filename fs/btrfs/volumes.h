@@ -201,6 +201,13 @@ struct btrfs_device {
 #ifdef CONFIG_BTRFS_EXPERIMENTAL
 	/* store an age of last read access */
 	atomic64_t last_io_age;
+
+	/* lock while updating values */
+	spinlock_t latency_lock;
+
+	/* last latency values for short term latency calculation */
+	atomic64_t last_nsecs_read;
+	atomic64_t last_ios_read;
 #endif
 };
 

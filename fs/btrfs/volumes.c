@@ -6013,17 +6013,21 @@ static int btrfs_read_preferred(struct btrfs_chunk_map *map, int first,
  * Compute the average latency of the device by dividing total latency by
  * number of IOs.
  */
-#define BTRFS_MAX_AGE_FOR_VALID_LATENCY 1000
+#define BTRFS_MAX_AGE_FOR_VALID_LATENCY 10000
 static u64 btrfs_device_read_latency(struct btrfs_device *device)
 {
 	u64 read_wait = part_stat_read(device->bdev, nsecs[READ]);
+	u64 last_nsecs_read = (u64)atomic64_read(&device->last_nsecs_read);
 	unsigned long read_ios = part_stat_read(device->bdev, ios[READ]);
+	unsigned long last_ios_read = (unsigned long)atomic64_read(&device->last_ios_read);
 	u64 last_io_age = (u64)atomic64_read(&device->last_io_age);
 	u64 avg_wait = 0;
+	s64 delta_read_wait = read_wait - last_nsecs_read;
+	s64 delta_read_ios = read_ios - last_ios_read;
 
 	if (last_io_age >= 0 && last_io_age < BTRFS_MAX_AGE_FOR_VALID_LATENCY
-	    && read_wait && read_ios && read_wait >= read_ios)
-		avg_wait = div_u64(read_wait, read_ios);
+	    && delta_read_wait > 0 && delta_read_ios > 0 && delta_read_wait >= delta_read_ios)
+		avg_wait = div_u64(delta_read_wait, delta_read_ios);
 
 	return avg_wait;
 }
@@ -6174,7 +6178,7 @@ static int btrfs_read_fastest_rr(struct btrfs_fs_info *fs_info,
 }
 #endif
 
-#define BTRFS_OLD_AGE_IO_BURST 20
+#define BTRFS_OLD_AGE_IO_BURST 100
 static int find_live_mirror(struct btrfs_fs_info *fs_info,
 			    struct btrfs_chunk_map *map, int first,
 			    int dev_replace_is_ongoing)
@@ -6256,19 +6260,24 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 
 out:
 #ifdef CONFIG_BTRFS_EXPERIMENTAL
-	/* reset age of selected stripe */
-	s64 current_age, new_age;
 	do {
-		current_age = atomic64_read(&map->stripes[preferred_mirror].dev->last_io_age);
+		/* reset age of selected stripe */
+		s64 current_age;
+		struct btrfs_device *pref_dev = map->stripes[preferred_mirror].dev;
 
+		spin_lock(&pref_dev->latency_lock);
+
+		current_age = atomic64_read(&pref_dev->last_io_age);
 		if (current_age >= BTRFS_MAX_AGE_FOR_VALID_LATENCY) {
-			new_age = -BTRFS_OLD_AGE_IO_BURST;
+			atomic64_set(&pref_dev->last_io_age, -BTRFS_OLD_AGE_IO_BURST);
+			atomic64_set(&pref_dev->last_nsecs_read, part_stat_read(pref_dev->bdev, nsecs[READ]));
+			atomic64_set(&pref_dev->last_ios_read, part_stat_read(pref_dev->bdev, ios[READ]));
 		} else if (current_age >= 0) {
-			new_age = 0;
-		} else {
-			return preferred_mirror;
+			atomic64_set(&pref_dev->last_io_age, 0);
 		}
-	} while (unlikely(atomic64_cmpxchg(&map->stripes[preferred_mirror].dev->last_io_age, current_age, new_age) != current_age));
+
+		spin_unlock(&pref_dev->latency_lock);
+	} while (0);
 #endif
 
 	/* we couldn't find one that doesn't fail.  Just return something
