@@ -6013,7 +6013,7 @@ static int btrfs_read_preferred(struct btrfs_chunk_map *map, int first,
  * Compute the average latency of the device by dividing total latency by
  * number of IOs.
  */
-#define BTRFS_DEVICE_LATENCY_CHECKPOINT_AGE 10000
+#define BTRFS_DEVICE_LATENCY_CHECKPOINT_AGE 30000
 static u64 btrfs_device_read_latency(struct btrfs_device *device)
 {
 	u64 read_wait = part_stat_read(device->bdev, nsecs[READ]);
@@ -6178,7 +6178,7 @@ static int btrfs_read_fastest_rr(struct btrfs_fs_info *fs_info,
 }
 #endif
 
-#define BTRFS_DEVICE_LATENCY_CHECKPOINT_BURST_IO 100
+#define BTRFS_DEVICE_LATENCY_CHECKPOINT_BURST_IO 30
 static int find_live_mirror(struct btrfs_fs_info *fs_info,
 			    struct btrfs_chunk_map *map, int first,
 			    int dev_replace_is_ongoing)
