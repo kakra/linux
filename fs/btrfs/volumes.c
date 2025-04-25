@@ -34,6 +34,10 @@
 #include "super.h"
 #include "raid-stripe-tree.h"
 
+#ifdef CONFIG_BTRFS_READ_POLICIES
+#include <linux/part_stat.h>
+#endif /* CONFIG_BTRFS_READ_POLICIES */
+
 #define BTRFS_BLOCK_GROUP_STRIPE_MASK	(BTRFS_BLOCK_GROUP_RAID0 | \
 					 BTRFS_BLOCK_GROUP_RAID10 | \
 					 BTRFS_BLOCK_GROUP_RAID56_MASK)
@@ -6051,6 +6055,50 @@ unsigned long btrfs_full_stripe_len(struct btrfs_fs_info *fs_info,
 }
 
 #ifdef CONFIG_BTRFS_READ_POLICIES
+static unsigned int part_in_flight(struct block_device *part)
+{
+	unsigned int inflight = 0;
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		inflight += part_stat_local_read_cpu(part, in_flight[READ], cpu) +
+			    part_stat_local_read_cpu(part, in_flight[WRITE], cpu);
+	}
+	if ((int)inflight < 0)
+		inflight = 0;
+
+	return inflight;
+}
+
+/*
+ * btrfs_earliest_stripe
+ *
+ * Select a stripe from the device with shortest in-flight requests.
+ */
+static int btrfs_read_earliest(struct btrfs_fs_info *fs_info,
+			       struct btrfs_chunk_map *map, int first,
+	int num_stripes)
+{
+	u64 best_in_flight = U64_MAX;
+	int best_stripe = first;
+
+	for (int index = first; index < first + num_stripes; index++) {
+		struct btrfs_device *device = map->stripes[index].dev;
+		u64 in_flight;
+
+		if (!device->bdev)
+			continue;
+
+		in_flight = part_in_flight(device->bdev);
+		if (best_in_flight > in_flight) {
+			best_in_flight = in_flight;
+			best_stripe = index;
+		}
+	}
+
+	return best_stripe;
+}
+
 static int btrfs_read_preferred(struct btrfs_chunk_map *map, int first, int num_stripes)
 {
 	for (int index = first; index < first + num_stripes; index++) {
@@ -6161,6 +6209,10 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 #ifdef CONFIG_BTRFS_READ_POLICIES
 	case BTRFS_READ_POLICY_RR:
 		preferred_mirror = btrfs_read_rr(map, first, num_stripes);
+		break;
+	case BTRFS_READ_POLICY_QUEUE:
+		preferred_mirror = btrfs_read_earliest(fs_info, map, first,
+						       num_stripes);
 		break;
 	case BTRFS_READ_POLICY_DEVID:
 		preferred_mirror = btrfs_read_preferred(map, first, num_stripes);

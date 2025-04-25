@@ -321,6 +321,8 @@ enum btrfs_read_policy {
 #ifdef CONFIG_BTRFS_READ_POLICIES
 	/* Balancing RAID1 reads across all striped devices (round-robin). */
 	BTRFS_READ_POLICY_RR,
+	/* Read from the device with the least in-flight requests */
+	BTRFS_READ_POLICY_QUEUE,
 	/* Read from a specific device. */
 	BTRFS_READ_POLICY_DEVID,
 #endif /* CONFIG_BTRFS_READ_POLICIES */
