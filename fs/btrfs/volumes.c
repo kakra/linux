@@ -6056,6 +6056,44 @@ static void btrfs_best_stripe(struct btrfs_fs_info *fs_info,
 	}
 }
 
+static unsigned int part_in_flight(struct block_device *part)
+{
+	unsigned int inflight = 0;
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		inflight += part_stat_local_read_cpu(part, in_flight[0], cpu) +
+			    part_stat_local_read_cpu(part, in_flight[1], cpu);
+	}
+	if ((int)inflight < 0)
+		inflight = 0;
+
+	return inflight;
+}
+
+/*
+ * btrfs_earliest_stripe
+ *
+ * Select a stripe from the device with shortest in-flight requests.
+ */
+static int btrfs_read_earliest(struct btrfs_fs_info *fs_info,
+                               struct btrfs_chunk_map *map, int first,
+                               int num_stripes)
+{
+	u64 best_in_flight = U64_MAX;
+	int best_stripe = 0;
+
+	for (int index = first; index < first + num_stripes; index++) {
+		u64 in_flight = part_in_flight(map->stripes[index].dev->bdev);
+		if (best_in_flight > in_flight) {
+			best_in_flight = in_flight;
+			best_stripe = index;
+		}
+	}
+
+	return best_stripe;
+}
+
 static int btrfs_read_fastest(struct btrfs_fs_info *fs_info,
                               struct btrfs_chunk_map *map, int first,
                               int num_stripes)
@@ -6230,6 +6268,10 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	case BTRFS_READ_POLICY_LATENCY_RR:
 		preferred_mirror = btrfs_read_fastest_rr(fs_info, map, first,
 		                                         num_stripes);
+		break;
+	case BTRFS_READ_POLICY_QUEUE:
+		preferred_mirror = btrfs_read_earliest(fs_info, map, first,
+		                                       num_stripes);
 		break;
 #endif
 	}
