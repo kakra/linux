@@ -6016,18 +6016,22 @@ static int btrfs_read_preferred(struct btrfs_chunk_map *map, int first,
 #define BTRFS_DEVICE_LATENCY_CHECKPOINT_AGE 30000
 static u64 btrfs_device_read_latency(struct btrfs_device *device)
 {
-	u64 read_wait = part_stat_read(device->bdev, nsecs[READ]);
-	u64 last_nsecs_read = (u64)atomic64_read(&device->last_nsecs_read);
-	unsigned long read_ios = part_stat_read(device->bdev, ios[READ]);
-	unsigned long last_ios_read = (unsigned long)atomic64_read(&device->last_ios_read);
-	u64 last_io_age = (u64)atomic64_read(&device->last_io_age);
 	u64 avg_wait = 0;
-	s64 delta_read_wait = read_wait - last_nsecs_read;
-	s64 delta_read_ios = read_ios - last_ios_read;
 
-	if (last_io_age >= 0 && last_io_age < BTRFS_DEVICE_LATENCY_CHECKPOINT_AGE
-	    && delta_read_wait > 0 && delta_read_ios > 0 && delta_read_wait >= delta_read_ios)
-		avg_wait = div_u64(delta_read_wait, delta_read_ios);
+	if (likely(device->bdev)) {
+		u64 read_wait = part_stat_read(device->bdev, nsecs[READ]);
+		u64 last_nsecs_read = (u64)atomic64_read(&device->last_nsecs_read);
+		unsigned long read_ios = part_stat_read(device->bdev, ios[READ]);
+		unsigned long last_ios_read = (unsigned long)atomic64_read(&device->last_ios_read);
+		u64 last_io_age = (u64)atomic64_read(&device->last_io_age);
+
+		s64 delta_read_wait = read_wait - last_nsecs_read;
+		s64 delta_read_ios = read_ios - last_ios_read;
+
+		if (last_io_age >= 0 && last_io_age < BTRFS_DEVICE_LATENCY_CHECKPOINT_AGE
+		    && delta_read_wait > 0 && delta_read_ios > 0 && delta_read_wait >= delta_read_ios)
+			avg_wait = div_u64(delta_read_wait, delta_read_ios);
+	}
 
 	return avg_wait;
 }
@@ -6084,7 +6088,8 @@ static int btrfs_read_earliest(struct btrfs_fs_info *fs_info,
 	int best_stripe = 0;
 
 	for (int index = first; index < first + num_stripes; index++) {
-		u64 in_flight = part_in_flight(map->stripes[index].dev->bdev);
+		struct block_device *part = map->stripes[index].dev->bdev;
+		u64 in_flight = part ? part_in_flight(part) : 0;
 		if (best_in_flight > in_flight) {
 			best_in_flight = in_flight;
 			best_stripe = index;
@@ -6311,7 +6316,7 @@ out:
 		spin_lock(&pref_dev->latency_lock);
 
 		current_age = atomic64_read(&pref_dev->last_io_age);
-		if (current_age >= BTRFS_DEVICE_LATENCY_CHECKPOINT_AGE) {
+		if (current_age >= BTRFS_DEVICE_LATENCY_CHECKPOINT_AGE && pref_dev->bdev) {
 			atomic64_inc(&pref_dev->checkpoints);
 			atomic64_set(&pref_dev->last_io_age, -BTRFS_DEVICE_LATENCY_CHECKPOINT_BURST_IO);
 			atomic64_set(&pref_dev->last_nsecs_read, part_stat_read(pref_dev->bdev, nsecs[READ]));
