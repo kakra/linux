@@ -6019,18 +6019,20 @@ static u64 btrfs_device_read_latency(struct btrfs_device *device)
 	u64 avg_wait = 0;
 
 	if (likely(device->bdev)) {
-		u64 read_wait = part_stat_read(device->bdev, nsecs[READ]);
-		u64 last_nsecs_read = (u64)atomic64_read(&device->last_nsecs_read);
-		unsigned long read_ios = part_stat_read(device->bdev, ios[READ]);
-		unsigned long last_ios_read = (unsigned long)atomic64_read(&device->last_ios_read);
 		u64 last_io_age = (u64)atomic64_read(&device->last_io_age);
 
-		s64 delta_read_wait = read_wait - last_nsecs_read;
-		s64 delta_read_ios = read_ios - last_ios_read;
+		if (likely(last_io_age >= 0 && last_io_age < BTRFS_DEVICE_LATENCY_CHECKPOINT_AGE)) {
+			u64 read_wait = part_stat_read(device->bdev, nsecs[READ]);
+			u64 last_nsecs_read = (u64)atomic64_read(&device->last_nsecs_read);
+			unsigned long read_ios = part_stat_read(device->bdev, ios[READ]);
+			unsigned long last_ios_read = (unsigned long)atomic64_read(&device->last_ios_read);
 
-		if (last_io_age >= 0 && last_io_age < BTRFS_DEVICE_LATENCY_CHECKPOINT_AGE
-		    && delta_read_wait > 0 && delta_read_ios > 0 && delta_read_wait >= delta_read_ios)
-			avg_wait = div_u64(delta_read_wait, delta_read_ios);
+			s64 delta_read_wait = read_wait - last_nsecs_read;
+			s64 delta_read_ios = read_ios - last_ios_read;
+
+			if (delta_read_wait > 0 && delta_read_ios > 0 && delta_read_wait >= delta_read_ios)
+				avg_wait = div_u64(delta_read_wait, delta_read_ios);
+		}
 	}
 
 	return avg_wait;
