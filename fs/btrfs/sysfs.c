@@ -1305,7 +1305,12 @@ static ssize_t btrfs_temp_fsid_show(struct kobject *kobj,
 }
 BTRFS_ATTR(, temp_fsid, btrfs_temp_fsid_show);
 
-static const char * const btrfs_read_policy_name[] = { "pid" };
+static const char * const btrfs_read_policy_name[] = {
+	"pid",
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+	"round-robin",
+#endif
+};
 
 static int btrfs_read_policy_to_enum(const char *str, s64 *value)
 {
@@ -1347,6 +1352,12 @@ static ssize_t btrfs_read_policy_show(struct kobject *kobj,
 
 		ret += sysfs_emit_at(buf, ret, "%s", btrfs_read_policy_name[i]);
 
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+		if (i == BTRFS_READ_POLICY_RR)
+			ret += sysfs_emit_at(buf, ret, ":%d",
+				 READ_ONCE(fs_devices->rr_min_contig_read));
+#endif
+
 		if (i == policy)
 			ret += sysfs_emit_at(buf, ret, "]");
 	}
@@ -1368,6 +1379,42 @@ static ssize_t btrfs_read_policy_store(struct kobject *kobj,
 	if (index < 0)
 		return -EINVAL;
 
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+	/* If moving out of RR then disable fs_stats */
+	if (fs_devices->read_policy == BTRFS_READ_POLICY_RR &&
+	    index != BTRFS_READ_POLICY_RR)
+		fs_devices->fs_stats = false;
+
+	if (index == BTRFS_READ_POLICY_RR) {
+		if (value != -1) {
+			u32 sectorsize = fs_devices->fs_info->sectorsize;
+
+			if (!IS_ALIGNED(value, sectorsize)) {
+				u64 temp_value = round_up(value, sectorsize);
+
+				btrfs_warn(fs_devices->fs_info,
+"read_policy: min contiguous read %lld should be multiples of the sectorsize %u, rounded to %llu",
+					  value, sectorsize, temp_value);
+				value = temp_value;
+			}
+		} else {
+			value = BTRFS_DEFAULT_RR_MIN_CONTIG_READ;
+		}
+
+		if (index != READ_ONCE(fs_devices->read_policy) ||
+		    value != READ_ONCE(fs_devices->rr_min_contig_read)) {
+			WRITE_ONCE(fs_devices->read_policy, index);
+			WRITE_ONCE(fs_devices->rr_min_contig_read, value);
+
+			btrfs_info(fs_devices->fs_info, "read policy set to '%s:%lld'",
+				   btrfs_read_policy_name[index], value);
+		}
+
+		fs_devices->fs_stats = true;
+
+		return len;
+	}
+#endif
 	if (index != READ_ONCE(fs_devices->read_policy)) {
 		WRITE_ONCE(fs_devices->read_policy, index);
 		btrfs_info(fs_devices->fs_info, "read policy set to '%s'",
