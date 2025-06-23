@@ -1120,6 +1120,7 @@ static int add_inline_refs(struct btrfs_backref_walk_ctx *ctx,
 		if (ret)
 			return ret;
 		ptr += btrfs_extent_inline_ref_size(type);
+		cond_resched();
 	}
 
 	return 0;
@@ -1223,7 +1224,7 @@ static int add_keyed_refs(struct btrfs_backref_walk_ctx *ctx,
 		}
 		if (ret)
 			return ret;
-
+		cond_resched();
 	}
 
 	return ret;
