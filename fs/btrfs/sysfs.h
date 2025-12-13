@@ -50,9 +50,9 @@ void btrfs_sysfs_del_one_qgroup(struct btrfs_fs_info *fs_info,
 				struct btrfs_qgroup *qgroup);
 int btrfs_read_policy_to_enum(const char *str, s64 *value);
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 int __init btrfs_read_policy_init(void);
 char *btrfs_get_mod_read_policy(void);
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 #endif

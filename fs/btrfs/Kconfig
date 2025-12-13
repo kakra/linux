@@ -150,6 +150,21 @@ config BTRFS_PER_DEVICE_IO_STATS
 
 	  If unsure, say N.
 
+config BTRFS_READ_POLICIES
+	bool "Btrfs read policies"
+	depends on BTRFS_FS
+	default n
+	help
+	  This enables btrfs read policies to control how btrfs selects stripes
+	  from a mirror during read operations. This was originally part of
+	  the experimental feature set but it is safe to use and can provide
+	  huge performance benefits in certain scenarios without causing any
+	  performance regressions.
+
+	  This adds a new file /sys/fs/btrfs/BTRFS-UUID/read_policy.
+
+	  If unsure, say N.
+
 config BTRFS_EXPERIMENTAL
 	bool "Btrfs experimental features"
 	depends on BTRFS_FS

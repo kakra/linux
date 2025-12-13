@@ -1323,13 +1323,13 @@ BTRFS_ATTR(, temp_fsid, btrfs_temp_fsid_show);
 
 static const char *btrfs_read_policy_name[] = {
 	"pid",
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	"round-robin",
 	"devid",
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 };
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 
 /* Global module configuration parameters. */
 static char *read_policy;
@@ -1342,7 +1342,7 @@ char *btrfs_get_mod_read_policy(void)
 module_param(read_policy, charp, 0);
 MODULE_PARM_DESC(read_policy,
 "Global read policy: pid (default), round-robin[:<min_contig_read>], devid[:<devid>]");
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 int btrfs_read_policy_to_enum(const char *str, s64 *value_ret)
 {
@@ -1354,7 +1354,7 @@ int btrfs_read_policy_to_enum(const char *str, s64 *value_ret)
 
 	strscpy(param, str);
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	/* Separate value from input in policy:value format. */
 	value_str = strchr(param, ':');
 	if (value_str) {
@@ -1371,12 +1371,12 @@ int btrfs_read_policy_to_enum(const char *str, s64 *value_ret)
 		if (*retptr != 0 || *value_ret <= 0)
 			return -EINVAL;
 	}
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 	return sysfs_match_string(btrfs_read_policy_name, param);
 }
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 int __init btrfs_read_policy_init(void)
 {
 	s64 value;
@@ -1388,7 +1388,7 @@ int __init btrfs_read_policy_init(void)
 
 	return 0;
 }
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 static ssize_t btrfs_read_policy_show(struct kobject *kobj,
 				      struct kobj_attribute *a, char *buf)
@@ -1407,7 +1407,7 @@ static ssize_t btrfs_read_policy_show(struct kobject *kobj,
 
 		ret += sysfs_emit_at(buf, ret, "%s", btrfs_read_policy_name[i]);
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 		if (i == BTRFS_READ_POLICY_RR)
 			ret += sysfs_emit_at(buf, ret, ":%u",
 					     READ_ONCE(fs_devices->rr_min_contig_read));
@@ -1415,7 +1415,7 @@ static ssize_t btrfs_read_policy_show(struct kobject *kobj,
 		if (i == BTRFS_READ_POLICY_DEVID)
 			ret += sysfs_emit_at(buf, ret, ":%llu",
 					     READ_ONCE(fs_devices->read_devid));
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 		if (i == policy)
 			ret += sysfs_emit_at(buf, ret, "]");
 	}
@@ -1437,7 +1437,7 @@ static ssize_t btrfs_read_policy_store(struct kobject *kobj,
 	if (index < 0)
 		return -EINVAL;
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	/* If moving from RR then disable collecting fs stats. */
 	if (fs_devices->read_policy == BTRFS_READ_POLICY_RR && index != BTRFS_READ_POLICY_RR)
 		fs_devices->collect_fs_stats = false;
@@ -1496,7 +1496,7 @@ static ssize_t btrfs_read_policy_store(struct kobject *kobj,
 
 		return len;
 	}
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 	if (index != READ_ONCE(fs_devices->read_policy)) {
 		WRITE_ONCE(fs_devices->read_policy, index);
 		btrfs_info(fs_devices->fs_info, "read policy set to '%s'",

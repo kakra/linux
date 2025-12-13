@@ -1282,7 +1282,7 @@ static int open_fs_devices(struct btrfs_fs_devices *fs_devices,
 	fs_devices->latest_dev = latest_dev;
 	fs_devices->total_rw_bytes = 0;
 	fs_devices->chunk_alloc_policy = BTRFS_CHUNK_ALLOC_REGULAR;
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	fs_devices->rr_min_contig_read = BTRFS_DEFAULT_RR_MIN_CONTIG_READ;
 	fs_devices->read_devid = latest_dev->devid;
 	fs_devices->read_policy = btrfs_read_policy_to_enum(btrfs_get_mod_read_policy(),
@@ -1298,7 +1298,7 @@ static int open_fs_devices(struct btrfs_fs_devices *fs_devices,
 	}
 #else
 	fs_devices->read_policy = BTRFS_READ_POLICY_PID;
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 	return 0;
 }
@@ -6050,7 +6050,7 @@ unsigned long btrfs_full_stripe_len(struct btrfs_fs_info *fs_info,
 	return len;
 }
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 static int btrfs_read_preferred(struct btrfs_chunk_map *map, int first, int num_stripes)
 {
 	for (int index = first; index < first + num_stripes; index++) {
@@ -6118,7 +6118,7 @@ static int btrfs_read_rr(const struct btrfs_chunk_map *map, int first, int num_s
 	read_cycle = total_reads / min_reads_per_dev;
 	return stripes[read_cycle % num_stripes].num;
 }
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 static int find_live_mirror(struct btrfs_fs_info *fs_info,
 			    struct btrfs_chunk_map *map, int first,
@@ -6158,14 +6158,14 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	case BTRFS_READ_POLICY_PID:
 		preferred_mirror = first + (current->pid % num_stripes);
 		break;
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	case BTRFS_READ_POLICY_RR:
 		preferred_mirror = btrfs_read_rr(map, first, num_stripes);
 		break;
 	case BTRFS_READ_POLICY_DEVID:
 		preferred_mirror = btrfs_read_preferred(map, first, num_stripes);
 		break;
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 	}
 
 	if (dev_replace_is_ongoing &&

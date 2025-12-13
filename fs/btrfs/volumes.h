@@ -318,12 +318,12 @@ enum btrfs_chunk_allocation_policy {
 enum btrfs_read_policy {
 	/* Use process PID to choose the stripe */
 	BTRFS_READ_POLICY_PID,
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	/* Balancing RAID1 reads across all striped devices (round-robin). */
 	BTRFS_READ_POLICY_RR,
 	/* Read from a specific device. */
 	BTRFS_READ_POLICY_DEVID,
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 	BTRFS_NR_READ_POLICY,
 };
 
@@ -463,7 +463,7 @@ struct btrfs_fs_devices {
 	/* Policy used to read the mirrored stripes. */
 	enum btrfs_read_policy read_policy;
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	/*
 	 * Minimum contiguous reads before switching to next device, the unit
 	 * is one block/sectorsize.
@@ -472,10 +472,12 @@ struct btrfs_fs_devices {
 
 	/* Device to be used for reading in case of RAID1. */
 	u64 read_devid;
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
 	/* Checksum mode - offload it or do it synchronously. */
 	enum btrfs_offload_csum_mode offload_csum_mode;
-#endif
+#endif /* CONFIG_BTRFS_EXPERIMENTAL */
 };
 
 #define BTRFS_MAX_DEVS(info) ((BTRFS_MAX_ITEM_SIZE(info)	\
