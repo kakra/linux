@@ -387,3 +387,6 @@
 470	n64	listns				sys_listns
 471	n64	rseq_slice_yield		sys_rseq_slice_yield
 472	n64	fchroot				sys_fchroot
+473	n64	process_ksm_enable		sys_process_ksm_enable
+474	n64	process_ksm_disable		sys_process_ksm_disable
+475	n64	process_ksm_status		sys_process_ksm_status
