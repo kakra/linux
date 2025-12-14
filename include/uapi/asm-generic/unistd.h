@@ -858,8 +858,15 @@ __SYSCALL(__NR_file_getattr, sys_file_getattr)
 #define __NR_file_setattr 469
 __SYSCALL(__NR_file_setattr, sys_file_setattr)
 
+#define __NR_process_ksm_enable 470
+__SYSCALL(__NR_process_ksm_enable, sys_process_ksm_enable)
+#define __NR_process_ksm_disable 471
+__SYSCALL(__NR_process_ksm_disable, sys_process_ksm_disable)
+#define __NR_process_ksm_status 472
+__SYSCALL(__NR_process_ksm_status, sys_process_ksm_status)
+
 #undef __NR_syscalls
-#define __NR_syscalls 470
+#define __NR_syscalls 473
 
 /*
  * 32 bit systems traditionally used different
