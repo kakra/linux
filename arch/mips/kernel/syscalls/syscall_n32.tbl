@@ -411,3 +411,6 @@
 470	n32	listns				sys_listns
 471	n32	rseq_slice_yield		sys_rseq_slice_yield
 472	n32	fchroot				sys_fchroot
+473	n32	process_ksm_enable		sys_process_ksm_enable
+474	n32	process_ksm_disable		sys_process_ksm_disable
+475	n32	process_ksm_status		sys_process_ksm_status
