@@ -867,8 +867,15 @@ __SYSCALL(__NR_rseq_slice_yield, sys_rseq_slice_yield)
 #define __NR_fchroot 472
 __SYSCALL(__NR_fchroot, sys_fchroot)
 
+#define __NR_process_ksm_enable 473
+__SYSCALL(__NR_process_ksm_enable, sys_process_ksm_enable)
+#define __NR_process_ksm_disable 474
+__SYSCALL(__NR_process_ksm_disable, sys_process_ksm_disable)
+#define __NR_process_ksm_status 475
+__SYSCALL(__NR_process_ksm_status, sys_process_ksm_status)
+
 #undef __NR_syscalls
-#define __NR_syscalls 473
+#define __NR_syscalls 476
 
 /*
  * 32 bit systems traditionally used different

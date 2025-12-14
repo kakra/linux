@@ -512,3 +512,6 @@
 580	common	listns				sys_listns
 581	common	rseq_slice_yield		sys_rseq_slice_yield
 582	common	fchroot				sys_fchroot
+583	common	process_ksm_enable		sys_process_ksm_enable
+584	common	process_ksm_disable		sys_process_ksm_disable
+585	common	process_ksm_status		sys_process_ksm_status
