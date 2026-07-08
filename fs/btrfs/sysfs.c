@@ -11,6 +11,10 @@
 #include <linux/bug.h>
 #include <linux/list.h>
 #include <crypto/hash.h>
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+#include <linux/jiffies.h>
+#include <linux/part_stat.h>
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 #include "messages.h"
 #include "ctree.h"
 #include "discard.h"
@@ -25,10 +29,6 @@
 #include "misc.h"
 #include "fs.h"
 #include "accessors.h"
-
-#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
-#include <linux/part_stat.h>
-#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 
 /*
  * Structure name                       Path
@@ -1326,6 +1326,7 @@ static const char *btrfs_read_policy_name[] = {
 #ifdef CONFIG_BTRFS_READ_POLICIES
 	"round-robin",
 	"queue",
+	"queue-adaptive",
 	"devid",
 #endif /* CONFIG_BTRFS_READ_POLICIES */
 };
@@ -1342,7 +1343,7 @@ char *btrfs_get_mod_read_policy(void)
 /* Set perms to 0, disable /sys/module/btrfs/parameter/read_policy interface. */
 module_param(read_policy, charp, 0);
 MODULE_PARM_DESC(read_policy,
-"Global read policy: pid (default), round-robin[:<min_contig_read>], queue, devid[:<devid>]");
+"Global read policy: pid (default), round-robin[:<min_contig_read>], queue, queue-adaptive, devid[:<devid>]");
 #endif /* CONFIG_BTRFS_READ_POLICIES */
 
 int btrfs_read_policy_to_enum(const char *str, s64 *value_ret)
@@ -2247,17 +2248,45 @@ static ssize_t btrfs_devinfo_read_stats_show(struct kobject *kobj,
 	unsigned long read_ios = device->bdev ?
 		part_stat_read(device->bdev, ios[READ]) : 0;
 	u64 health_avg = (u64)atomic64_read(&device->health_avg_ns);
+	unsigned long health_avg_jiffies = READ_ONCE(device->health_avg_jiffies);
 
 	u64 avg_wait = 0;
+	u64 health_ago = 0;
+	u64 health_score = 0;
 	if (read_wait && read_ios && read_wait >= read_ios)
 		avg_wait = div_u64(read_wait, read_ios);
+	if (health_avg_jiffies)
+		health_ago = (jiffies - health_avg_jiffies) / HZ;
+	/*
+	 * "score" is avg_wait (this device's lifetime avg) relative to
+	 * health_avg (its current short window), as a percentage: ~100 means
+	 * "behaving like its own history", higher means "currently healthier
+	 * than its own history". This mixes two different time bases on
+	 * purpose - it is a quick, human-readable "how is this device doing
+	 * right now compared to itself" signal, which vetoed/overflow alone
+	 * don't give you at a glance. It intentionally does NOT reflect
+	 * queue-adaptive's actual peer-relative veto decision (see
+	 * btrfs_read_queue_adaptive() in volumes.c, which compares
+	 * health_avg_ns only against other *current* mirror candidates, never
+	 * against this device's own lifetime avg) - once the read policies
+	 * are more settled, some of these diagnostic fields may be trimmed or
+	 * split into their own sysfs attributes.
+	 */
+	if (health_avg) {
+		if (avg_wait > U64_MAX / 100)
+			health_score = U64_MAX;
+		else
+			health_score = div64_u64(avg_wait * 100, health_avg);
+	}
 
 	return scnprintf(buf, PAGE_SIZE,
-			 "ios %lu wait %llu avg %llu age %llu ignored %llu health avg %llu\n",
+			 "ios %lu wait %llu avg %llu age %llu ignored %llu health avg %llu ago %llu score %llu vetoed %llu overflow %llu\n",
 			 read_ios, read_wait, avg_wait,
 			 (u64)atomic64_read(&device->last_io_age),
 			 (u64)atomic64_read(&device->stripe_ignored),
-			 health_avg);
+			 health_avg, health_ago, health_score,
+			 (u64)atomic64_read(&device->health_vetoed),
+			 (u64)atomic64_read(&device->health_overflow));
 }
 BTRFS_ATTR(devid, read_stats, btrfs_devinfo_read_stats_show);
 #endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */

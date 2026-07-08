@@ -209,6 +209,14 @@ struct btrfs_device {
 	/* store how often a stripe has been ignored as a read candidate */
 	atomic64_t stripe_ignored;
 
+	/* store how often queue-adaptive rejected this device due to latency */
+	atomic64_t health_vetoed;
+
+	/* store how often queue-adaptive still selected this slow device */
+	atomic64_t health_overflow;
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+
+#if defined(CONFIG_BTRFS_READ_POLICIES) || defined(CONFIG_BTRFS_PER_DEVICE_IO_STATS)
 	/*
 	 * Cached windowed avg read latency (nsec/io), refreshed from a delta
 	 * against health_check_ios/health_check_wait, not from the lifetime
@@ -223,8 +231,19 @@ struct btrfs_device {
 
 	/* jiffies at the last health refresh attempt. */
 	unsigned long health_check_jiffies;
-#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+
+	/* jiffies at the last successful health_avg_ns update. */
+	unsigned long health_avg_jiffies;
+#endif /* CONFIG_BTRFS_READ_POLICIES || CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 };
+
+#ifdef CONFIG_BTRFS_READ_POLICIES
+/*
+ * How many times worse than the best current peer's windowed avg read
+ * latency counts as anomalous for queue-adaptive.
+ */
+#define BTRFS_READ_HEALTH_SICK_MULTIPLIER	4ULL
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 /*
  * Block group or device which contains an active swapfile. Used for preventing
@@ -338,6 +357,15 @@ enum btrfs_read_policy {
 	BTRFS_READ_POLICY_RR,
 	/* Read from the device with the least in-flight requests */
 	BTRFS_READ_POLICY_QUEUE,
+	/*
+	 * Like QUEUE, but veto picking a device whose cached windowed avg
+	 * read latency is durably worse than its current mirror peers'
+	 * (derived fresh at selection time, never cached as a verdict -
+	 * whether the cause is malfunction or simply a slower device tier,
+	 * e.g. HDD mirrored against SSD), unless its in-flight lead is large
+	 * enough to trust anyway.
+	 */
+	BTRFS_READ_POLICY_QUEUE_ADAPTIVE,
 	/* Read from a specific device. */
 	BTRFS_READ_POLICY_DEVID,
 #endif /* CONFIG_BTRFS_READ_POLICIES */

@@ -35,11 +35,9 @@
 #include "raid-stripe-tree.h"
 
 #if defined(CONFIG_BTRFS_READ_POLICIES) || defined(CONFIG_BTRFS_PER_DEVICE_IO_STATS)
+#include <linux/jiffies.h>
 #include <linux/part_stat.h>
 #endif /* CONFIG_BTRFS_READ_POLICIES || CONFIG_BTRFS_PER_DEVICE_IO_STATS */
-#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
-#include <linux/jiffies.h>
-#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 
 #define BTRFS_BLOCK_GROUP_STRIPE_MASK	(BTRFS_BLOCK_GROUP_RAID0 | \
 					 BTRFS_BLOCK_GROUP_RAID10 | \
@@ -6122,9 +6120,8 @@ static int btrfs_read_earliest(struct btrfs_fs_info *fs_info,
 	return best_stripe;
 }
 
-#endif /* CONFIG_BTRFS_READ_POLICIES */
+#define BTRFS_READ_QUEUE_ADAPTIVE_GUARD_MARGIN	2ULL
 
-#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
 #define BTRFS_READ_HEALTH_RECHECK_INTERVAL	HZ
 #define BTRFS_READ_HEALTH_MIN_SAMPLE_IOS	256ULL
 
@@ -6132,6 +6129,15 @@ static int btrfs_read_earliest(struct btrfs_fs_info *fs_info,
  * Refresh the cached windowed avg read latency for the current candidates.
  * The avg is a delta against the previous checkpoint, not a lifetime average,
  * so unrelated bulk reads can only skew the current window.
+ *
+ * Only queue-adaptive (btrfs_read_queue_adaptive(), below) calls this, so it
+ * lives right above its one caller instead of needing a forward declaration.
+ * It stays gated by CONFIG_BTRFS_READ_POLICIES alone (this whole block
+ * already is), matching that caller's own requirement - not the broader
+ * OR-guard the health_* struct fields use, since sysfs.c's read_stats
+ * display still needs those fields to exist whenever
+ * CONFIG_BTRFS_PER_DEVICE_IO_STATS is on, independent of whether
+ * CONFIG_BTRFS_READ_POLICIES (and therefore queue-adaptive) is enabled.
  */
 static void btrfs_update_read_health(struct btrfs_chunk_map *map, int first,
 				     int num_stripes)
@@ -6187,11 +6193,129 @@ static void btrfs_update_read_health(struct btrfs_chunk_map *map, int first,
 		atomic64_set(&device->health_avg_ns, div64_u64(delta_wait, delta_ios));
 		atomic64_set(&device->health_check_ios, read_ios);
 		atomic64_set(&device->health_check_wait, read_wait);
+		WRITE_ONCE(device->health_avg_jiffies, jiffies);
 	}
 }
-#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 
-#ifdef CONFIG_BTRFS_READ_POLICIES
+/*
+ * btrfs_read_queue_adaptive
+ *
+ * Select the stripe with the lowest in-flight request count, exactly
+ * like btrfs_read_earliest(), with ties broken by device->last_io_age
+ * (most-overdue device wins) so healthy/idle mirrors still rotate fairly
+ * instead of collapsing onto the first stripe - the same tie-break
+ * btrfs_read_earliest() itself now uses via
+ * btrfs_queue_read_candidate_better(), so this is not a behavioral
+ * difference from plain queue.
+ *
+ * The one behavioral difference from plain queue: candidates are
+ * classified "slow" fresh, right here, by comparing each candidate's
+ * cached device->health_avg_ns against the best (lowest) value among
+ * only the *actual current* stripe candidates - never a cached verdict,
+ * so it can never be stale from a different mirror pairing on a larger
+ * pool. If the in-flight winner is not derived-slow, done. If it is,
+ * it's only trusted when its in-flight lead over the best non-slow
+ * candidate is MORE than BTRFS_READ_QUEUE_ADAPTIVE_GUARD_MARGIN
+ * requests; otherwise the best non-slow candidate is used instead. This
+ * is a coarse veto, not the primary selector - on an all-healthy,
+ * same-tier array, no candidate is ever derived-slow and behavior is
+ * identical to queue. On a mixed-tier array (e.g. HDD mirrored against
+ * SSD) the slower device is durably derived-slow and mostly avoided,
+ * but can still absorb overflow once the faster candidate's queue backs
+ * up past the guard margin.
+ */
+static int btrfs_read_queue_adaptive(struct btrfs_fs_info *fs_info,
+				      struct btrfs_chunk_map *map, int first,
+				      int num_stripes)
+{
+	u64 avg[BTRFS_RAID1_MAX_MIRRORS];
+	u64 best_avg = U64_MAX;
+	u64 sick_threshold;
+	u64 best_inflight = U64_MAX;
+	u64 best_age = 0;
+	int best_stripe = first;
+	bool best_slow;
+	u64 best_healthy_inflight = U64_MAX;
+	u64 best_healthy_age = 0;
+	int best_healthy_stripe = -1;
+
+	btrfs_update_read_health(map, first, num_stripes);
+
+	/*
+	 * Gather this stripe's actual current candidates' cached avgs and find
+	 * the best among only them - this is the peer-relative derivation, done
+	 * fresh every call.
+	 */
+	for (int index = first; index < first + num_stripes; index++) {
+		struct btrfs_device *device = map->stripes[index].dev;
+		u64 my_avg;
+
+		if (!device->bdev) {
+			avg[index - first] = 0;
+			continue;
+		}
+
+		my_avg = atomic64_read(&device->health_avg_ns);
+		avg[index - first] = my_avg;
+		best_avg = min_not_zero(best_avg, my_avg);
+	}
+
+	/*
+	 * Overflow-safe threshold: saturate instead of wrapping in the
+	 * practically-impossible case that best_avg is already close to
+	 * U64_MAX; best_avg == U64_MAX (no candidate has data yet) also
+	 * saturates here, so nothing can be derived-slow without data.
+	 */
+	if (best_avg == U64_MAX || best_avg > U64_MAX / BTRFS_READ_HEALTH_SICK_MULTIPLIER)
+		sick_threshold = U64_MAX;
+	else
+		sick_threshold = best_avg * BTRFS_READ_HEALTH_SICK_MULTIPLIER;
+
+	for (int index = first; index < first + num_stripes; index++) {
+		struct btrfs_device *device = map->stripes[index].dev;
+		u64 in_flight;
+		u64 age = atomic64_read(&device->last_io_age);
+		u64 my_avg = avg[index - first];
+		bool slow = (my_avg != 0 && my_avg > sick_threshold);
+
+		if (!device->bdev)
+			continue;
+
+		in_flight = part_in_flight(device->bdev);
+		if (btrfs_queue_read_candidate_better(in_flight, age,
+						      best_inflight,
+						      best_age)) {
+			best_inflight = in_flight;
+			best_age = age;
+			best_stripe = index;
+		}
+		if (!slow &&
+		    btrfs_queue_read_candidate_better(in_flight, age,
+						      best_healthy_inflight,
+						      best_healthy_age)) {
+			best_healthy_inflight = in_flight;
+			best_healthy_age = age;
+			best_healthy_stripe = index;
+		}
+	}
+
+	best_slow = (avg[best_stripe - first] != 0 &&
+		     avg[best_stripe - first] > sick_threshold);
+	if (!best_slow)
+		return best_stripe;
+	if (best_healthy_stripe < 0)
+		return best_stripe; /* every candidate derived-slow, no alternative */
+	if (best_healthy_inflight <= best_inflight + BTRFS_READ_QUEUE_ADAPTIVE_GUARD_MARGIN) {
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+		atomic64_inc(&map->stripes[best_stripe].dev->health_vetoed);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+		return best_healthy_stripe; /* slow device's lead is not more than the margin */
+	}
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+	atomic64_inc(&map->stripes[best_stripe].dev->health_overflow);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+	return best_stripe; /* slow device's lead is more than the margin - trust it anyway */
+}
 
 static int btrfs_read_preferred(struct btrfs_chunk_map *map, int first, int num_stripes)
 {
@@ -6293,10 +6417,6 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	}
 #endif /* CONFIG_BTRFS_READ_POLICIES || CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 
-#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
-	btrfs_update_read_health(map, first, num_stripes);
-#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
-
 	switch (policy) {
 	default:
 		/* Shouldn't happen, just warn and use pid instead of failing */
@@ -6314,6 +6434,10 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	case BTRFS_READ_POLICY_QUEUE:
 		preferred_mirror = btrfs_read_earliest(fs_info, map, first,
 						       num_stripes);
+		break;
+	case BTRFS_READ_POLICY_QUEUE_ADAPTIVE:
+		preferred_mirror = btrfs_read_queue_adaptive(fs_info, map, first,
+							      num_stripes);
 		break;
 	case BTRFS_READ_POLICY_DEVID:
 		preferred_mirror = btrfs_read_preferred(map, first, num_stripes);
