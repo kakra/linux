@@ -6070,28 +6070,48 @@ static unsigned int part_in_flight(struct block_device *part)
 	return inflight;
 }
 
+static bool btrfs_queue_read_candidate_better(u64 in_flight, u64 last_io_age,
+					      u64 best_in_flight,
+					      u64 best_last_io_age)
+{
+	if (in_flight < best_in_flight)
+		return true;
+
+	if (in_flight == best_in_flight && last_io_age > best_last_io_age)
+		return true;
+
+	return false;
+}
+
 /*
  * btrfs_earliest_stripe
  *
- * Select a stripe from the device with shortest in-flight requests.
+ * Select a stripe from the device with shortest in-flight requests. If several
+ * stripes have the same queue depth, prefer the stripe that has gone the
+ * longest without being selected.
  */
 static int btrfs_read_earliest(struct btrfs_fs_info *fs_info,
 			       struct btrfs_chunk_map *map, int first,
-	int num_stripes)
+			       int num_stripes)
 {
 	u64 best_in_flight = U64_MAX;
+	u64 best_last_io_age = 0;
 	int best_stripe = first;
 
 	for (int index = first; index < first + num_stripes; index++) {
 		struct btrfs_device *device = map->stripes[index].dev;
 		u64 in_flight;
+		u64 last_io_age = atomic64_read(&device->last_io_age);
 
 		if (!device->bdev)
 			continue;
 
 		in_flight = part_in_flight(device->bdev);
-		if (best_in_flight > in_flight) {
+		if (btrfs_queue_read_candidate_better(in_flight, last_io_age,
+						      best_in_flight,
+						      best_last_io_age)) {
 			best_in_flight = in_flight;
+			best_last_io_age = last_io_age;
 			best_stripe = index;
 		}
 	}
