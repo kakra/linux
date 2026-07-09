@@ -2246,15 +2246,18 @@ static ssize_t btrfs_devinfo_read_stats_show(struct kobject *kobj,
 	u64 read_wait = device->bdev ? part_stat_read(device->bdev, nsecs[READ]) : 0;
 	unsigned long read_ios = device->bdev ?
 		part_stat_read(device->bdev, ios[READ]) : 0;
+	u64 health_avg = (u64)atomic64_read(&device->health_avg_ns);
 
 	u64 avg_wait = 0;
 	if (read_wait && read_ios && read_wait >= read_ios)
 		avg_wait = div_u64(read_wait, read_ios);
 
-	return scnprintf(buf, PAGE_SIZE, "ios %lu wait %llu avg %llu age %llu ignored %llu\n",
+	return scnprintf(buf, PAGE_SIZE,
+			 "ios %lu wait %llu avg %llu age %llu ignored %llu health avg %llu\n",
 			 read_ios, read_wait, avg_wait,
 			 (u64)atomic64_read(&device->last_io_age),
-			 (u64)atomic64_read(&device->stripe_ignored));
+			 (u64)atomic64_read(&device->stripe_ignored),
+			 health_avg);
 }
 BTRFS_ATTR(devid, read_stats, btrfs_devinfo_read_stats_show);
 #endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */

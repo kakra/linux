@@ -208,6 +208,21 @@ struct btrfs_device {
 #ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
 	/* store how often a stripe has been ignored as a read candidate */
 	atomic64_t stripe_ignored;
+
+	/*
+	 * Cached windowed avg read latency (nsec/io), refreshed from a delta
+	 * against health_check_ios/health_check_wait, not from the lifetime
+	 * total. 0 means "not yet classified this window." atomic64_t so
+	 * readers on 32-bit architectures cannot observe a torn 64-bit value.
+	 */
+	atomic64_t health_avg_ns;
+
+	/* ios[READ]/nsecs[READ] checkpoint at the last health refresh. */
+	atomic64_t health_check_ios;
+	atomic64_t health_check_wait;
+
+	/* jiffies at the last health refresh attempt. */
+	unsigned long health_check_jiffies;
 #endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 };
 

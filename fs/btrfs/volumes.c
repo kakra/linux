@@ -34,9 +34,12 @@
 #include "super.h"
 #include "raid-stripe-tree.h"
 
-#ifdef CONFIG_BTRFS_READ_POLICIES
+#if defined(CONFIG_BTRFS_READ_POLICIES) || defined(CONFIG_BTRFS_PER_DEVICE_IO_STATS)
 #include <linux/part_stat.h>
-#endif /* CONFIG_BTRFS_READ_POLICIES */
+#endif /* CONFIG_BTRFS_READ_POLICIES || CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+#include <linux/jiffies.h>
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 
 #define BTRFS_BLOCK_GROUP_STRIPE_MASK	(BTRFS_BLOCK_GROUP_RAID0 | \
 					 BTRFS_BLOCK_GROUP_RAID10 | \
@@ -6119,6 +6122,77 @@ static int btrfs_read_earliest(struct btrfs_fs_info *fs_info,
 	return best_stripe;
 }
 
+#endif /* CONFIG_BTRFS_READ_POLICIES */
+
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+#define BTRFS_READ_HEALTH_RECHECK_INTERVAL	HZ
+#define BTRFS_READ_HEALTH_MIN_SAMPLE_IOS	256ULL
+
+/*
+ * Refresh the cached windowed avg read latency for the current candidates.
+ * The avg is a delta against the previous checkpoint, not a lifetime average,
+ * so unrelated bulk reads can only skew the current window.
+ */
+static void btrfs_update_read_health(struct btrfs_chunk_map *map, int first,
+				     int num_stripes)
+{
+	for (int index = first; index < first + num_stripes; index++) {
+		struct btrfs_device *device = map->stripes[index].dev;
+		unsigned long checked_jiffies = READ_ONCE(device->health_check_jiffies);
+		u64 read_ios, read_ios_before, read_wait, checked_ios, checked_wait;
+		u64 delta_ios, delta_wait;
+
+		/*
+		 * A missing mirror has no bdev; part_stat_read() would
+		 * dereference it. Leave it unclassified (health_avg_ns stays
+		 * 0, "no data") - find_live_mirror()'s own tolerance loop
+		 * already avoids selecting it regardless of read policy.
+		 */
+		if (!device->bdev)
+			continue;
+
+		if (!time_after(jiffies, checked_jiffies + BTRFS_READ_HEALTH_RECHECK_INTERVAL))
+			continue;
+
+		/* Only one reader may advance a device's checkpoint each interval. */
+		if (cmpxchg(&device->health_check_jiffies, checked_jiffies, jiffies) !=
+		    checked_jiffies)
+			continue;
+
+		/*
+		 * ios is updated before nsecs. Bracket the wait read to reject a
+		 * completion that could pair newer wait time with an older io count.
+		 */
+		read_ios_before = part_stat_read(device->bdev, ios[READ]);
+		read_wait = part_stat_read(device->bdev, nsecs[READ]);
+		read_ios = part_stat_read(device->bdev, ios[READ]);
+		if (read_ios_before != read_ios)
+			continue;
+
+		checked_ios = atomic64_read(&device->health_check_ios);
+		checked_wait = atomic64_read(&device->health_check_wait);
+
+		if (checked_ios == 0 && checked_wait == 0 && read_ios != 0) {
+			atomic64_set(&device->health_check_ios, read_ios);
+			atomic64_set(&device->health_check_wait, read_wait);
+			continue;
+		}
+
+		delta_ios = read_ios >= checked_ios ? read_ios - checked_ios : read_ios;
+		delta_wait = read_wait >= checked_wait ? read_wait - checked_wait : read_wait;
+
+		if (delta_ios < BTRFS_READ_HEALTH_MIN_SAMPLE_IOS)
+			continue;
+
+		atomic64_set(&device->health_avg_ns, div64_u64(delta_wait, delta_ios));
+		atomic64_set(&device->health_check_ios, read_ios);
+		atomic64_set(&device->health_check_wait, read_wait);
+	}
+}
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+
+#ifdef CONFIG_BTRFS_READ_POLICIES
+
 static int btrfs_read_preferred(struct btrfs_chunk_map *map, int first, int num_stripes)
 {
 	for (int index = first; index < first + num_stripes; index++) {
@@ -6218,6 +6292,10 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 #endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 	}
 #endif /* CONFIG_BTRFS_READ_POLICIES || CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+	btrfs_update_read_health(map, first, num_stripes);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 
 	switch (policy) {
 	default:
