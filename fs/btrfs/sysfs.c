@@ -2111,6 +2111,7 @@ static bool btrfs_dev_allocation_hint_valid(u64 type)
 	case BTRFS_DEV_ALLOCATION_METADATA_ONLY:
 	case BTRFS_DEV_ALLOCATION_DATA_ONLY:
 	case BTRFS_DEV_ALLOCATION_PREFERRED_NONE:
+	case BTRFS_DEV_ALLOCATION_NONE_ONLY:
 		return true;
 	default:
 		return false;
