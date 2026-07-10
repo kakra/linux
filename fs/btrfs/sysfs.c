@@ -2141,6 +2141,22 @@ static ssize_t btrfs_devinfo_error_stats_show(struct kobject *kobj,
 BTRFS_ATTR(devid, error_stats, btrfs_devinfo_error_stats_show);
 
 #ifdef CONFIG_BTRFS_ALLOCATOR_HINTS
+static bool btrfs_dev_allocation_hint_valid(u64 type)
+{
+	if (type & ~((1ULL << BTRFS_DEV_ALLOCATION_MASK_BIT_COUNT) - 1))
+		return false;
+
+	switch (type) {
+	case BTRFS_DEV_ALLOCATION_PREFERRED_DATA:
+	case BTRFS_DEV_ALLOCATION_PREFERRED_METADATA:
+	case BTRFS_DEV_ALLOCATION_METADATA_ONLY:
+	case BTRFS_DEV_ALLOCATION_DATA_ONLY:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static ssize_t btrfs_devinfo_type_show(struct kobject *kobj,
 				       struct kobj_attribute *a, char *buf)
 {
@@ -2149,7 +2165,69 @@ static ssize_t btrfs_devinfo_type_show(struct kobject *kobj,
 
 	return scnprintf(buf, PAGE_SIZE, "0x%016llx\n", device->type);
 }
-BTRFS_ATTR(devid, type, btrfs_devinfo_type_show);
+
+static ssize_t btrfs_devinfo_type_store(struct kobject *kobj,
+					struct kobj_attribute *a,
+					const char *buf, size_t len)
+{
+	struct btrfs_fs_info *fs_info;
+	struct btrfs_root *root;
+	struct btrfs_device *device;
+	int ret;
+	struct btrfs_trans_handle *trans;
+
+	u64 type, prev_type;
+
+	device = container_of(kobj, struct btrfs_device, devid_kobj);
+	fs_info = device->fs_info;
+	if (!fs_info)
+		return -EPERM;
+
+	/*
+	 * Changing the type field requires starting a transaction which will cause a NULL dereference in
+	 * __reserve_bytes if the file system is not fully open. Thus, return EBUSY if the file system is not fully
+	 * initialized.
+	 */
+	if (!test_bit(BTRFS_FS_OPEN, &fs_info->flags))
+		return -EBUSY;
+
+	root = fs_info->chunk_root;
+	if (sb_rdonly(fs_info->sb))
+		return -EROFS;
+
+	ret = kstrtou64(buf, 0, &type);
+	if (ret < 0)
+		return -EINVAL;
+
+	/* for now, only allow defined allocation hint values */
+	if (!btrfs_dev_allocation_hint_valid(type))
+		return -EINVAL;
+
+	trans = btrfs_start_transaction(root, 1);
+	if (IS_ERR(trans))
+		return PTR_ERR(trans);
+
+	prev_type = device->type;
+	device->type = type;
+
+	ret = btrfs_update_device(trans, device);
+
+	if (ret < 0) {
+		btrfs_abort_transaction(trans, ret);
+		btrfs_end_transaction(trans);
+		goto abort;
+	}
+
+	ret = btrfs_commit_transaction(trans);
+	if (ret < 0)
+		goto abort;
+
+	return len;
+abort:
+	device->type = prev_type;
+	return ret;
+}
+BTRFS_ATTR_RW(devid, type, btrfs_devinfo_type_show, btrfs_devinfo_type_store);
 #endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
 
 /*
