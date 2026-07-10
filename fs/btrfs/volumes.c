@@ -6139,6 +6139,15 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	else
 		num_stripes = map->num_stripes;
 
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+	/* age each possible stripe by 1 IO */
+	for (int i = first; i < first + num_stripes; i++) {
+		struct btrfs_device *device = map->stripes[i].dev;
+		atomic64_inc(&device->last_io_age);
+		atomic64_inc(&device->stripe_ignored);
+	}
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+
 	switch (policy) {
 	default:
 		/* Shouldn't happen, just warn and use pid instead of failing */
@@ -6174,13 +6183,28 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	for (tolerance = 0; tolerance < 2; tolerance++) {
 		if (map->stripes[preferred_mirror].dev->bdev &&
 		    (tolerance || map->stripes[preferred_mirror].dev != srcdev))
-			return preferred_mirror;
+			goto out;
 		for (i = first; i < first + num_stripes; i++) {
 			if (map->stripes[i].dev->bdev &&
-			    (tolerance || map->stripes[i].dev != srcdev))
-				return i;
+			    (tolerance || map->stripes[i].dev != srcdev)) {
+				preferred_mirror = i;
+				goto out;
+			}
 		}
 	}
+
+out:
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+	do {
+		struct btrfs_device *preferred_device = map->stripes[preferred_mirror].dev;
+
+		/* reset age of selected stripe */
+		atomic64_set(&preferred_device->last_io_age, 0);
+
+		/* do not count ignores for the selected stripe */
+		atomic64_dec(&preferred_device->stripe_ignored);
+	} while (0);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 
 	/* we couldn't find one that doesn't fail.  Just return something
 	 * and the io error handling code will clean up eventually

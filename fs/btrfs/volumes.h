@@ -201,6 +201,14 @@ struct btrfs_device {
 
 	/* Bandwidth limit for scrub, in bytes */
 	u64 scrub_speed_max;
+
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+	/* store an age of last read access */
+	atomic64_t last_io_age;
+
+	/* store how often a stripe has been ignored as a read candidate */
+	atomic64_t stripe_ignored;
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 };
 
 /*

@@ -138,6 +138,18 @@ config BTRFS_ALLOCATOR_HINTS
 
 	  If unsure, say N.
 
+config BTRFS_PER_DEVICE_IO_STATS
+	bool "Btrfs per io devices stats"
+	depends on BTRFS_FS
+	default n
+	help
+	  Enable collecting io read stats per devices to evaluate the effects
+	  of different read policies better.
+
+	  This adds a new file /sys/fs/btrfs/BTRFS-UUID/devinfo/ID/read_stats.
+
+	  If unsure, say N.
+
 config BTRFS_EXPERIMENTAL
 	bool "Btrfs experimental features"
 	depends on BTRFS_FS
