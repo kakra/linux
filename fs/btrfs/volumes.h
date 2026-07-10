@@ -599,6 +599,9 @@ struct btrfs_device_info {
 	u64 dev_offset;
 	u64 max_avail;
 	u64 total_avail;
+#ifdef CONFIG_BTRFS_ALLOCATOR_HINTS
+	int alloc_hint;
+#endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
 };
 
 struct btrfs_raid_attr {

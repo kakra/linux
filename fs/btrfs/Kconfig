@@ -99,6 +99,15 @@ config BTRFS_ALLOCATOR_HINTS
 	  still enough RAID mirror members but the allocation hints don't
 	  allow to allocate from specific devices.
 
+	  Mixed data and metadata block groups ignore all allocator hints.
+	  They cannot separate the two chunk classes and are outside the
+	  tiering use case targeted by this feature.
+
+	  Device replace does not copy the allocation hint to the target
+	  device. Reapply the hint after replacing a device. Hint updates are
+	  also not serialized with chunk allocation, so a concurrent new chunk
+	  may use either the old or the new setting.
+
 	  You are advised to watch your free space closely with btrfs tools
 	  instead of relying on df only.
 
