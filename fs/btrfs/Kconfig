@@ -84,6 +84,45 @@ config BTRFS_ASSERT
 
 	  If unsure, say N.
 
+config BTRFS_ALLOCATOR_HINTS
+	bool "Btrfs allocator hints"
+	depends on BTRFS_FS
+	default n
+	help
+	  Enable support for allocator hints. This feature allows to select
+	  dedicated or preferred devices for meta data vs data, or prevent
+	  allocation from a device at all. This feature does not interact
+	  well with free space calculation because the formula expects to
+	  allocate space always from a device with most free space which is
+	  not true when hints are applied. It may also create issues if a
+	  device from the pool dies resulting in a situation where there are
+	  still enough RAID mirror members but the allocation hints don't
+	  allow to allocate from specific devices.
+
+	  You are advised to watch your free space closely with btrfs tools
+	  instead of relying on df only.
+
+	  Mounting a btrfs with this feature on or off is always possible,
+	  there are no incompatible changes to the file system. But running
+	  without this feature may place new chunks on unwanted devices and
+	  you may want to clean up later by balancing the affected chunks.
+
+	  Supported hint types in /sys/fs/btrfs/BTRFS-UUID/devinfo/ID/type:
+
+	  - type = 0 - allocate data chunks from this ID first (recommended
+	               for big disks with good sequential performance, e.g.
+	               HDDs), prefers data on this device
+	  - type = 1 - allocate meta data chunks from this ID first
+	               (recommended for fast and small disks with good
+	               latency, e.g. SSD/NVMe), prefers meta data on this
+	               device
+	  - type = 2 - allocate only meta data chunks from this ID, no data
+	               chunks will ever be allocated from this device
+	  - type = 3 - allocate only data chunks from this ID, no meta data
+	               chunks will ever be allocated from this device
+
+	  If unsure, say N.
+
 config BTRFS_EXPERIMENTAL
 	bool "Btrfs experimental features"
 	depends on BTRFS_FS
