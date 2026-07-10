@@ -132,6 +132,9 @@ config BTRFS_ALLOCATOR_HINTS
 	  - type = 4 - allocate any chunks from this device last, will never
 	               allocate any space from this device unless there isn't
 	               enough space on other devices
+	  - type = 5 - never allocate any new non-mixed chunks, useful when
+	               putting a device out of use and to avoid redundant chunk
+	               writes during balance/replace
 
 	  If unsure, say N.
 

@@ -191,6 +191,7 @@ enum btrfs_raid_types __attribute_const__ btrfs_bg_flags_to_raid_index(u64 flags
 		BTRFS_DEV_ALLOCATION_MASK_BIT_COUNT)
 
 static const int alloc_hint_map[BTRFS_DEV_ALLOCATION_MASK_COUNT] = {
+	[BTRFS_DEV_ALLOCATION_NONE_ONLY] = -99,
 	[BTRFS_DEV_ALLOCATION_DATA_ONLY] = -1,
 	[BTRFS_DEV_ALLOCATION_PREFERRED_DATA] = 0,
 	[BTRFS_DEV_ALLOCATION_PREFERRED_METADATA] = 1,
@@ -5345,6 +5346,11 @@ static int gather_device_info(struct btrfs_fs_devices *fs_devices,
 			if (BTRFS_DEV_ALLOCATION_METADATA_ONLY == hint)
 				continue;
 			/*
+			 * skip BTRFS_DEV_NONE_ONLY disks
+			 */
+			if (BTRFS_DEV_ALLOCATION_NONE_ONLY == hint)
+				continue;
+			/*
 			 * if a data chunk must be allocated,
 			 * sort also by hint (data disk
 			 * higher priority)
@@ -5357,6 +5363,11 @@ static int gather_device_info(struct btrfs_fs_devices *fs_devices,
 			 * skip BTRFS_DEV_DATA_ONLY disks
 			 */
 			if (BTRFS_DEV_ALLOCATION_DATA_ONLY == hint)
+				continue;
+			/*
+			 * skip BTRFS_DEV_NONE_ONLY disks
+			 */
+			if (BTRFS_DEV_ALLOCATION_NONE_ONLY == hint)
 				continue;
 			/*
 			 * if a metadata chunk must be allocated,
