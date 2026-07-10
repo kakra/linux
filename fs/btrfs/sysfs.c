@@ -2140,6 +2140,18 @@ static ssize_t btrfs_devinfo_error_stats_show(struct kobject *kobj,
 }
 BTRFS_ATTR(devid, error_stats, btrfs_devinfo_error_stats_show);
 
+#ifdef CONFIG_BTRFS_ALLOCATOR_HINTS
+static ssize_t btrfs_devinfo_type_show(struct kobject *kobj,
+				       struct kobj_attribute *a, char *buf)
+{
+	struct btrfs_device *device = container_of(kobj, struct btrfs_device,
+						   devid_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "0x%016llx\n", device->type);
+}
+BTRFS_ATTR(devid, type, btrfs_devinfo_type_show);
+#endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
+
 /*
  * Information about one device.
  *
@@ -2153,6 +2165,9 @@ static struct attribute *devid_attrs[] = {
 	BTRFS_ATTR_PTR(devid, replace_target),
 	BTRFS_ATTR_PTR(devid, scrub_speed_max),
 	BTRFS_ATTR_PTR(devid, writeable),
+#ifdef CONFIG_BTRFS_ALLOCATOR_HINTS
+	BTRFS_ATTR_PTR(devid, type),
+#endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
 	NULL
 };
 ATTRIBUTE_GROUPS(devid);
