@@ -195,6 +195,7 @@ static const int alloc_hint_map[BTRFS_DEV_ALLOCATION_MASK_COUNT] = {
 	[BTRFS_DEV_ALLOCATION_PREFERRED_DATA] = 0,
 	[BTRFS_DEV_ALLOCATION_PREFERRED_METADATA] = 1,
 	[BTRFS_DEV_ALLOCATION_METADATA_ONLY] = 2,
+	[BTRFS_DEV_ALLOCATION_PREFERRED_NONE] = 99,
 	/* the other values are set to 0 */
 };
 #endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
@@ -5362,7 +5363,10 @@ static int gather_device_info(struct btrfs_fs_devices *fs_devices,
 			 * sort also by hint (metadata hint
 			 * higher priority)
 			 */
-			devices_info[ndevs].alloc_hint = alloc_hint_map[hint];
+			if (BTRFS_DEV_ALLOCATION_PREFERRED_NONE == hint)
+				devices_info[ndevs].alloc_hint = -alloc_hint_map[hint];
+			else
+				devices_info[ndevs].alloc_hint = alloc_hint_map[hint];
 		}
 #endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
 

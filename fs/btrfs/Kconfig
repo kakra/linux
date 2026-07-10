@@ -129,6 +129,9 @@ config BTRFS_ALLOCATOR_HINTS
 	               chunks will ever be allocated from this device
 	  - type = 3 - allocate only data chunks from this ID, no meta data
 	               chunks will ever be allocated from this device
+	  - type = 4 - allocate any chunks from this device last, will never
+	               allocate any space from this device unless there isn't
+	               enough space on other devices
 
 	  If unsure, say N.
 
