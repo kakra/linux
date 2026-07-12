@@ -6120,7 +6120,8 @@ static int btrfs_read_earliest(struct btrfs_fs_info *fs_info,
 	return best_stripe;
 }
 
-#define BTRFS_READ_QUEUE_ADAPTIVE_GUARD_MARGIN	2ULL
+#define BTRFS_READ_QUEUE_ADAPTIVE_MIN_GUARD	2ULL
+#define BTRFS_READ_QUEUE_ADAPTIVE_MAX_GUARD	16ULL
 
 #define BTRFS_READ_HEALTH_RECHECK_INTERVAL	HZ
 #define BTRFS_READ_HEALTH_MIN_SAMPLE_IOS	256ULL
@@ -6215,14 +6216,14 @@ static void btrfs_update_read_health(struct btrfs_chunk_map *map, int first,
  * so it can never be stale from a different mirror pairing on a larger
  * pool. If the in-flight winner is not derived-slow, done. If it is,
  * it's only trusted when its in-flight lead over the best non-slow
- * candidate is MORE than BTRFS_READ_QUEUE_ADAPTIVE_GUARD_MARGIN
- * requests; otherwise the best non-slow candidate is used instead. This
- * is a coarse veto, not the primary selector - on an all-healthy,
- * same-tier array, no candidate is ever derived-slow and behavior is
- * identical to queue. On a mixed-tier array (e.g. HDD mirrored against
- * SSD) the slower device is durably derived-slow and mostly avoided,
- * but can still absorb overflow once the faster candidate's queue backs
- * up past the guard margin.
+ * candidate is more than their rounded-up latency ratio, clamped to a
+ * reasonable range. Otherwise the best non-slow candidate is used
+ * instead. This is a coarse veto, not the primary selector - on an
+ * all-healthy, same-tier array, no candidate is ever derived-slow and
+ * behavior is identical to queue. On a mixed-tier array (e.g. HDD
+ * mirrored against SSD) the slower device is durably derived-slow and
+ * mostly avoided, but can still absorb overflow once the faster
+ * candidate's queue backs up past the dynamic guard margin.
  */
 static int btrfs_read_queue_adaptive(struct btrfs_fs_info *fs_info,
 				      struct btrfs_chunk_map *map, int first,
@@ -6238,6 +6239,8 @@ static int btrfs_read_queue_adaptive(struct btrfs_fs_info *fs_info,
 	u64 best_healthy_inflight = U64_MAX;
 	u64 best_healthy_age = 0;
 	int best_healthy_stripe = -1;
+	u64 healthy_avg;
+	u64 guard;
 
 	btrfs_update_read_health(map, first, num_stripes);
 
@@ -6305,7 +6308,21 @@ static int btrfs_read_queue_adaptive(struct btrfs_fs_info *fs_info,
 		return best_stripe;
 	if (best_healthy_stripe < 0)
 		return best_stripe; /* every candidate derived-slow, no alternative */
-	if (best_healthy_inflight <= best_inflight + BTRFS_READ_QUEUE_ADAPTIVE_GUARD_MARGIN) {
+
+	/*
+	 * Scale the guard with the latency difference to favor tail latency.
+	 * An unknown alternative keeps the previous minimum guard behavior.
+	 */
+	healthy_avg = avg[best_healthy_stripe - first];
+	guard = BTRFS_READ_QUEUE_ADAPTIVE_MIN_GUARD;
+
+	if (healthy_avg != 0) {
+		guard = DIV64_U64_ROUND_UP(avg[best_stripe - first], healthy_avg);
+		guard = clamp_t(u64, guard, BTRFS_READ_QUEUE_ADAPTIVE_MIN_GUARD,
+				BTRFS_READ_QUEUE_ADAPTIVE_MAX_GUARD);
+	}
+
+	if (best_healthy_inflight - best_inflight <= guard) {
 #ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
 		atomic64_inc(&map->stripes[best_stripe].dev->health_vetoed);
 #endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
