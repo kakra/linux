@@ -214,6 +214,12 @@ struct btrfs_device {
 
 	/* store how often queue-adaptive still selected this slow device */
 	atomic64_t health_overflow;
+
+	/* store how often read health sampling was attempted */
+	atomic64_t health_checks;
+
+	/* store how often read io count changed while sampling health */
+	atomic64_t health_unstable;
 #endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 
 #if defined(CONFIG_BTRFS_READ_POLICIES) || defined(CONFIG_BTRFS_PER_DEVICE_IO_STATS)

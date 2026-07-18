@@ -6166,6 +6166,10 @@ static void btrfs_update_read_health(struct btrfs_chunk_map *map, int first,
 		    checked_jiffies)
 			continue;
 
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+		atomic64_inc(&device->health_checks);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+
 		/*
 		 * ios is updated before nsecs. Bracket the wait read to reject a
 		 * completion that could pair newer wait time with an older io count.
@@ -6173,8 +6177,12 @@ static void btrfs_update_read_health(struct btrfs_chunk_map *map, int first,
 		read_ios_before = part_stat_read(device->bdev, ios[READ]);
 		read_wait = part_stat_read(device->bdev, nsecs[READ]);
 		read_ios = part_stat_read(device->bdev, ios[READ]);
-		if (read_ios_before != read_ios)
+		if (read_ios_before != read_ios) {
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+			atomic64_inc(&device->health_unstable);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 			continue;
+		}
 
 		checked_ios = atomic64_read(&device->health_check_ios);
 		checked_wait = atomic64_read(&device->health_check_wait);

@@ -2280,13 +2280,15 @@ static ssize_t btrfs_devinfo_read_stats_show(struct kobject *kobj,
 	}
 
 	return scnprintf(buf, PAGE_SIZE,
-			 "ios %lu wait %llu avg %llu age %llu ignored %llu health avg %llu ago %llu score %llu vetoed %llu overflow %llu\n",
+			 "ios %lu wait %llu avg %llu age %llu ignored %llu health avg %llu ago %llu score %llu vetoed %llu overflow %llu checks %llu unstable %llu\n",
 			 read_ios, read_wait, avg_wait,
 			 (u64)atomic64_read(&device->last_io_age),
 			 (u64)atomic64_read(&device->stripe_ignored),
 			 health_avg, health_ago, health_score,
 			 (u64)atomic64_read(&device->health_vetoed),
-			 (u64)atomic64_read(&device->health_overflow));
+			 (u64)atomic64_read(&device->health_overflow),
+			 (u64)atomic64_read(&device->health_checks),
+			 (u64)atomic64_read(&device->health_unstable));
 }
 BTRFS_ATTR(devid, read_stats, btrfs_devinfo_read_stats_show);
 #endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
