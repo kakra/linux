@@ -728,7 +728,13 @@ void elv_update_nr_hw_queues(struct request_queue *q,
 void elevator_set_default(struct request_queue *q)
 {
 	struct elv_change_ctx ctx = {
+#ifdef CONFIG_MQ_IOSCHED_DEFAULT_ADIOS
+		.name = "adios",
+#elif defined(CONFIG_ZEN_INTERACTIVE) && defined(CONFIG_IOSCHED_BFQ)
+		.name = "bfq",
+#else
 		.name = "mq-deadline",
+#endif
 		.no_uevent = true,
 	};
 	int err;
@@ -744,17 +750,25 @@ void elevator_set_default(struct request_queue *q)
 	 * have multiple queues or mq-deadline is not available, default
 	 * to "none".
 	 */
+#ifndef CONFIG_MQ_IOSCHED_DEFAULT_ADIOS
+	bool is_sq = q->nr_hw_queues == 1 || blk_mq_is_shared_tags(q->tag_set->flags);
+	if (!is_sq)
+#if defined(CONFIG_ZEN_INTERACTIVE) && defined(CONFIG_MQ_IOSCHED_KYBER)
+		ctx.name = "kyber";
+#else
+		return;
+#endif
+#endif // CONFIG_MQ_IOSCHED_DEFAULT_ADIOS
+
 	ctx.type = elevator_find_get(ctx.name);
 	if (!ctx.type)
 		return;
 
-	if ((q->nr_hw_queues == 1 ||
-			blk_mq_is_shared_tags(q->tag_set->flags))) {
-		err = elevator_change(q, &ctx);
-		if (err < 0)
-			pr_warn("\"%s\" elevator initialization, failed %d, falling back to \"none\"\n",
-					ctx.name, err);
-	}
+	err = elevator_change(q, &ctx);
+	if (err < 0)
+		pr_warn("\"%s\" elevator initialization, failed %d, falling back to \"none\"\n",
+				ctx.name, err);
+
 	elevator_put(ctx.type);
 }
 
