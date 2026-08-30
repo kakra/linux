@@ -1,0 +1,34 @@
+name: Makefile CI
+
+on:
+  push:
+    branches:
+      - 'rebase-*/btrfs-patches'
+  pull_request:
+    branches:
+      - 'rebase-*/btrfs-patches'
+  workflow_dispatch:
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure minimal kernel
+      run: make tinyconfig
+
+    - name: Configure btrfs
+      run: |
+        echo "CONFIG_BLOCK=y" >>.config
+        echo "CONFIG_BTRFS_FS=y" >>.config
+        echo "CONFIG_BTRFS_FS_POSIX_ACL=y" >>.config
+        echo "CONFIG_BTRFS_ALLOCATOR_HINTS=y" >>.config
+        echo "CONFIG_BTRFS_PER_DEVICE_IO_STATS=y" >>.config
+        echo "CONFIG_BTRFS_READ_POLICIES=y" >>.config
+        make oldconfig
+
+    - name: Compile kernel
+      run: make -j$(nproc) all

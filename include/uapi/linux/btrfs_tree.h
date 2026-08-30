@@ -578,6 +578,31 @@ struct btrfs_node {
 	struct btrfs_key_ptr ptrs[];
 } __attribute__ ((__packed__));
 
+/*
+ * This defines the chunk allocation hints for a device. It uses an ifdef guard
+ * in UAPI to avoid exposing it to userspace.
+ */
+#ifdef CONFIG_BTRFS_ALLOCATOR_HINTS
+/* dev_item.type */
+
+/* btrfs chunk allocation hints */
+#define BTRFS_DEV_ALLOCATION_MASK_BIT_COUNT	3
+/* preferred data chunk, but metadata chunk allowed */
+#define BTRFS_DEV_ALLOCATION_PREFERRED_DATA	(0ULL)
+/* preferred metadata chunk, but data chunk allowed */
+#define BTRFS_DEV_ALLOCATION_PREFERRED_METADATA	(1ULL)
+/* only metadata chunk allowed */
+#define BTRFS_DEV_ALLOCATION_METADATA_ONLY	(2ULL)
+/* only data chunk allowed */
+#define BTRFS_DEV_ALLOCATION_DATA_ONLY		(3ULL)
+/* avoid chunk allocation if possible */
+#define BTRFS_DEV_ALLOCATION_PREFERRED_NONE	(4ULL)
+/* deny chunk allocation */
+#define BTRFS_DEV_ALLOCATION_NONE_ONLY	        (5ULL)
+/* 6..7 are unused values */
+
+#endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
+
 struct btrfs_dev_item {
 	/* the internal btrfs device id */
 	__le64 devid;

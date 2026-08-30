@@ -11,6 +11,10 @@
 #include <linux/bug.h>
 #include <linux/list.h>
 #include <crypto/hash.h>
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+#include <linux/jiffies.h>
+#include <linux/part_stat.h>
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 #include "messages.h"
 #include "ctree.h"
 #include "discard.h"
@@ -1319,13 +1323,15 @@ BTRFS_ATTR(, temp_fsid, btrfs_temp_fsid_show);
 
 static const char *btrfs_read_policy_name[] = {
 	"pid",
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	"round-robin",
+	"queue",
+	"queue-adaptive",
 	"devid",
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 };
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 
 /* Global module configuration parameters. */
 static char *read_policy;
@@ -1337,8 +1343,8 @@ char *btrfs_get_mod_read_policy(void)
 /* Set perms to 0, disable /sys/module/btrfs/parameter/read_policy interface. */
 module_param(read_policy, charp, 0);
 MODULE_PARM_DESC(read_policy,
-"Global read policy: pid (default), round-robin[:<min_contig_read>], devid[:<devid>]");
-#endif
+"Global read policy: pid (default), round-robin[:<min_contig_read>], queue, queue-adaptive, devid[:<devid>]");
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 int btrfs_read_policy_to_enum(const char *str, s64 *value_ret)
 {
@@ -1350,7 +1356,7 @@ int btrfs_read_policy_to_enum(const char *str, s64 *value_ret)
 
 	strscpy(param, str);
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	/* Separate value from input in policy:value format. */
 	value_str = strchr(param, ':');
 	if (value_str) {
@@ -1367,12 +1373,12 @@ int btrfs_read_policy_to_enum(const char *str, s64 *value_ret)
 		if (*retptr != 0 || *value_ret <= 0)
 			return -EINVAL;
 	}
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 	return sysfs_match_string(btrfs_read_policy_name, param);
 }
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 int __init btrfs_read_policy_init(void)
 {
 	s64 value;
@@ -1384,7 +1390,7 @@ int __init btrfs_read_policy_init(void)
 
 	return 0;
 }
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 static ssize_t btrfs_read_policy_show(struct kobject *kobj,
 				      struct kobj_attribute *a, char *buf)
@@ -1403,7 +1409,7 @@ static ssize_t btrfs_read_policy_show(struct kobject *kobj,
 
 		ret += sysfs_emit_at(buf, ret, "%s", btrfs_read_policy_name[i]);
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 		if (i == BTRFS_READ_POLICY_RR)
 			ret += sysfs_emit_at(buf, ret, ":%u",
 					     READ_ONCE(fs_devices->rr_min_contig_read));
@@ -1411,7 +1417,7 @@ static ssize_t btrfs_read_policy_show(struct kobject *kobj,
 		if (i == BTRFS_READ_POLICY_DEVID)
 			ret += sysfs_emit_at(buf, ret, ":%llu",
 					     READ_ONCE(fs_devices->read_devid));
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 		if (i == policy)
 			ret += sysfs_emit_at(buf, ret, "]");
 	}
@@ -1433,7 +1439,7 @@ static ssize_t btrfs_read_policy_store(struct kobject *kobj,
 	if (index < 0)
 		return -EINVAL;
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	/* If moving from RR then disable collecting fs stats. */
 	if (fs_devices->read_policy == BTRFS_READ_POLICY_RR && index != BTRFS_READ_POLICY_RR)
 		fs_devices->collect_fs_stats = false;
@@ -1492,7 +1498,7 @@ static ssize_t btrfs_read_policy_store(struct kobject *kobj,
 
 		return len;
 	}
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 	if (index != READ_ONCE(fs_devices->read_policy)) {
 		WRITE_ONCE(fs_devices->read_policy, index);
 		btrfs_info(fs_devices->fs_info, "read policy set to '%s'",
@@ -2139,12 +2145,162 @@ static ssize_t btrfs_devinfo_error_stats_show(struct kobject *kobj,
 }
 BTRFS_ATTR(devid, error_stats, btrfs_devinfo_error_stats_show);
 
+#ifdef CONFIG_BTRFS_ALLOCATOR_HINTS
+static bool btrfs_dev_allocation_hint_valid(u64 type)
+{
+	if (type & ~((1ULL << BTRFS_DEV_ALLOCATION_MASK_BIT_COUNT) - 1))
+		return false;
+
+	switch (type) {
+	case BTRFS_DEV_ALLOCATION_PREFERRED_DATA:
+	case BTRFS_DEV_ALLOCATION_PREFERRED_METADATA:
+	case BTRFS_DEV_ALLOCATION_METADATA_ONLY:
+	case BTRFS_DEV_ALLOCATION_DATA_ONLY:
+	case BTRFS_DEV_ALLOCATION_PREFERRED_NONE:
+	case BTRFS_DEV_ALLOCATION_NONE_ONLY:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static ssize_t btrfs_devinfo_type_show(struct kobject *kobj,
+				       struct kobj_attribute *a, char *buf)
+{
+	struct btrfs_device *device = container_of(kobj, struct btrfs_device,
+						   devid_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "0x%016llx\n", device->type);
+}
+
+static ssize_t btrfs_devinfo_type_store(struct kobject *kobj,
+					struct kobj_attribute *a,
+					const char *buf, size_t len)
+{
+	struct btrfs_fs_info *fs_info;
+	struct btrfs_root *root;
+	struct btrfs_device *device;
+	int ret;
+	struct btrfs_trans_handle *trans;
+
+	u64 type, prev_type;
+
+	device = container_of(kobj, struct btrfs_device, devid_kobj);
+	fs_info = device->fs_info;
+	if (!fs_info)
+		return -EPERM;
+
+	/*
+	 * Changing the type field requires starting a transaction which will cause a NULL dereference in
+	 * __reserve_bytes if the file system is not fully open. Thus, return EBUSY if the file system is not fully
+	 * initialized.
+	 */
+	if (!test_bit(BTRFS_FS_OPEN, &fs_info->flags))
+		return -EBUSY;
+
+	root = fs_info->chunk_root;
+	if (sb_rdonly(fs_info->sb))
+		return -EROFS;
+
+	ret = kstrtou64(buf, 0, &type);
+	if (ret < 0)
+		return -EINVAL;
+
+	/* for now, only allow defined allocation hint values */
+	if (!btrfs_dev_allocation_hint_valid(type))
+		return -EINVAL;
+
+	trans = btrfs_start_transaction(root, 1);
+	if (IS_ERR(trans))
+		return PTR_ERR(trans);
+
+	prev_type = device->type;
+	device->type = type;
+
+	ret = btrfs_update_device(trans, device);
+
+	if (ret < 0) {
+		btrfs_abort_transaction(trans, ret);
+		btrfs_end_transaction(trans);
+		goto abort;
+	}
+
+	ret = btrfs_commit_transaction(trans);
+	if (ret < 0)
+		goto abort;
+
+	return len;
+abort:
+	device->type = prev_type;
+	return ret;
+}
+BTRFS_ATTR_RW(devid, type, btrfs_devinfo_type_show, btrfs_devinfo_type_store);
+#endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
+
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+static ssize_t btrfs_devinfo_read_stats_show(struct kobject *kobj,
+					     struct kobj_attribute *a, char *buf)
+{
+	struct btrfs_device *device = container_of(kobj, struct btrfs_device,
+						   devid_kobj);
+	u64 read_wait = device->bdev ? part_stat_read(device->bdev, nsecs[READ]) : 0;
+	unsigned long read_ios = device->bdev ?
+		part_stat_read(device->bdev, ios[READ]) : 0;
+	u64 health_avg = (u64)atomic64_read(&device->health_avg_ns);
+	unsigned long health_avg_jiffies = READ_ONCE(device->health_avg_jiffies);
+
+	u64 avg_wait = 0;
+	u64 health_ago = 0;
+	u64 health_score = 0;
+	if (read_wait && read_ios && read_wait >= read_ios)
+		avg_wait = div_u64(read_wait, read_ios);
+	if (health_avg_jiffies)
+		health_ago = (jiffies - health_avg_jiffies) / HZ;
+	/*
+	 * "score" is avg_wait (this device's lifetime avg) relative to
+	 * health_avg (its current short window), as a percentage: ~100 means
+	 * "behaving like its own history", higher means "currently healthier
+	 * than its own history". This mixes two different time bases on
+	 * purpose - it is a quick, human-readable "how is this device doing
+	 * right now compared to itself" signal, which vetoed/overflow alone
+	 * don't give you at a glance. It intentionally does NOT reflect
+	 * queue-adaptive's actual peer-relative veto decision (see
+	 * btrfs_read_queue_adaptive() in volumes.c, which compares
+	 * health_avg_ns only against other *current* mirror candidates, never
+	 * against this device's own lifetime avg) - once the read policies
+	 * are more settled, some of these diagnostic fields may be trimmed or
+	 * split into their own sysfs attributes.
+	 */
+	if (health_avg) {
+		if (avg_wait > U64_MAX / 100)
+			health_score = U64_MAX;
+		else
+			health_score = div64_u64(avg_wait * 100, health_avg);
+	}
+
+	return scnprintf(buf, PAGE_SIZE,
+			 "ios %lu wait %llu avg %llu age %llu ignored %llu health avg %llu ago %llu score %llu vetoed %llu overflow %llu checks %llu unstable %llu\n",
+			 read_ios, read_wait, avg_wait,
+			 (u64)atomic64_read(&device->last_io_age),
+			 (u64)atomic64_read(&device->stripe_ignored),
+			 health_avg, health_ago, health_score,
+			 (u64)atomic64_read(&device->health_vetoed),
+			 (u64)atomic64_read(&device->health_overflow),
+			 (u64)atomic64_read(&device->health_checks),
+			 (u64)atomic64_read(&device->health_unstable));
+}
+BTRFS_ATTR(devid, read_stats, btrfs_devinfo_read_stats_show);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+
 /*
  * Information about one device.
  *
  * Path: /sys/fs/btrfs/<uuid>/devinfo/<devid>/
  */
 static struct attribute *devid_attrs[] = {
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+	BTRFS_ATTR_PTR(devid, read_stats),
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 	BTRFS_ATTR_PTR(devid, error_stats),
 	BTRFS_ATTR_PTR(devid, fsid),
 	BTRFS_ATTR_PTR(devid, in_fs_metadata),
@@ -2152,6 +2308,9 @@ static struct attribute *devid_attrs[] = {
 	BTRFS_ATTR_PTR(devid, replace_target),
 	BTRFS_ATTR_PTR(devid, scrub_speed_max),
 	BTRFS_ATTR_PTR(devid, writeable),
+#ifdef CONFIG_BTRFS_ALLOCATOR_HINTS
+	BTRFS_ATTR_PTR(devid, type),
+#endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
 	NULL
 };
 ATTRIBUTE_GROUPS(devid);

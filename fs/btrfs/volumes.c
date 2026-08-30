@@ -34,6 +34,11 @@
 #include "super.h"
 #include "raid-stripe-tree.h"
 
+#if defined(CONFIG_BTRFS_READ_POLICIES) || defined(CONFIG_BTRFS_PER_DEVICE_IO_STATS)
+#include <linux/jiffies.h>
+#include <linux/part_stat.h>
+#endif /* CONFIG_BTRFS_READ_POLICIES || CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+
 #define BTRFS_BLOCK_GROUP_STRIPE_MASK	(BTRFS_BLOCK_GROUP_RAID0 | \
 					 BTRFS_BLOCK_GROUP_RAID10 | \
 					 BTRFS_BLOCK_GROUP_RAID56_MASK)
@@ -183,6 +188,23 @@ enum btrfs_raid_types __attribute_const__ btrfs_bg_flags_to_raid_index(u64 flags
 
 	return BTRFS_BG_FLAG_TO_INDEX(profile);
 }
+
+#ifdef CONFIG_BTRFS_ALLOCATOR_HINTS
+#define BTRFS_DEV_ALLOCATION_MASK ((1ULL << \
+		BTRFS_DEV_ALLOCATION_MASK_BIT_COUNT) - 1)
+#define BTRFS_DEV_ALLOCATION_MASK_COUNT (1ULL << \
+		BTRFS_DEV_ALLOCATION_MASK_BIT_COUNT)
+
+static const int alloc_hint_map[BTRFS_DEV_ALLOCATION_MASK_COUNT] = {
+	[BTRFS_DEV_ALLOCATION_NONE_ONLY] = -99,
+	[BTRFS_DEV_ALLOCATION_DATA_ONLY] = -1,
+	[BTRFS_DEV_ALLOCATION_PREFERRED_DATA] = 0,
+	[BTRFS_DEV_ALLOCATION_PREFERRED_METADATA] = 1,
+	[BTRFS_DEV_ALLOCATION_METADATA_ONLY] = 2,
+	[BTRFS_DEV_ALLOCATION_PREFERRED_NONE] = 99,
+	/* the other values are set to 0 */
+};
+#endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
 
 const char *btrfs_bg_type_to_raid_name(u64 flags)
 {
@@ -1265,7 +1287,7 @@ static int open_fs_devices(struct btrfs_fs_devices *fs_devices,
 	fs_devices->latest_dev = latest_dev;
 	fs_devices->total_rw_bytes = 0;
 	fs_devices->chunk_alloc_policy = BTRFS_CHUNK_ALLOC_REGULAR;
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	fs_devices->rr_min_contig_read = BTRFS_DEFAULT_RR_MIN_CONTIG_READ;
 	fs_devices->read_devid = latest_dev->devid;
 	fs_devices->read_policy = btrfs_read_policy_to_enum(btrfs_get_mod_read_policy(),
@@ -1281,7 +1303,7 @@ static int open_fs_devices(struct btrfs_fs_devices *fs_devices,
 	}
 #else
 	fs_devices->read_policy = BTRFS_READ_POLICY_PID;
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 	return 0;
 }
@@ -3066,8 +3088,8 @@ error:
 	return ret;
 }
 
-static noinline int btrfs_update_device(struct btrfs_trans_handle *trans,
-					struct btrfs_device *device)
+noinline int btrfs_update_device(struct btrfs_trans_handle *trans,
+				 struct btrfs_device *device)
 {
 	int ret;
 	struct btrfs_path *path;
@@ -5219,13 +5241,20 @@ static int btrfs_add_system_chunk(struct btrfs_fs_info *fs_info,
 }
 
 /*
- * sort the devices in descending order by max_avail, total_avail
+ * sort the devices in descending order by alloc_hint (optional),
+ * max_avail, total_avail
  */
 static int btrfs_cmp_device_info(const void *a, const void *b)
 {
 	const struct btrfs_device_info *di_a = a;
 	const struct btrfs_device_info *di_b = b;
 
+#ifdef CONFIG_BTRFS_ALLOCATOR_HINTS
+	if (di_a->alloc_hint > di_b->alloc_hint)
+		return -1;
+	if (di_a->alloc_hint < di_b->alloc_hint)
+		return 1;
+#endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
 	if (di_a->max_avail > di_b->max_avail)
 		return -1;
 	if (di_a->max_avail < di_b->max_avail)
@@ -5433,15 +5462,122 @@ static int gather_device_info(struct btrfs_fs_devices *fs_devices,
 		devices_info[ndevs].max_avail = max_avail;
 		devices_info[ndevs].total_avail = total_avail;
 		devices_info[ndevs].dev = device;
+
+#ifdef CONFIG_BTRFS_ALLOCATOR_HINTS
+		if ((ctl->type & BTRFS_BLOCK_GROUP_DATA) &&
+		     (ctl->type & BTRFS_BLOCK_GROUP_METADATA)) {
+			/*
+			 * Mixed block groups cannot separate data and metadata
+			 * placement. Ignore all hints and retain normal free-space
+			 * ordering.
+			 */
+			devices_info[ndevs].alloc_hint = 0;
+		} else if (ctl->type & BTRFS_BLOCK_GROUP_DATA) {
+			int hint = device->type & BTRFS_DEV_ALLOCATION_MASK;
+
+			/*
+			 * skip BTRFS_DEV_METADATA_ONLY disks
+			 */
+			if (BTRFS_DEV_ALLOCATION_METADATA_ONLY == hint)
+				continue;
+			/*
+			 * skip BTRFS_DEV_NONE_ONLY disks
+			 */
+			if (BTRFS_DEV_ALLOCATION_NONE_ONLY == hint)
+				continue;
+			/*
+			 * if a data chunk must be allocated,
+			 * sort also by hint (data disk
+			 * higher priority)
+			 */
+			devices_info[ndevs].alloc_hint = -alloc_hint_map[hint];
+		} else { /* BTRFS_BLOCK_GROUP_METADATA */
+			int hint = device->type & BTRFS_DEV_ALLOCATION_MASK;
+
+			/*
+			 * skip BTRFS_DEV_DATA_ONLY disks
+			 */
+			if (BTRFS_DEV_ALLOCATION_DATA_ONLY == hint)
+				continue;
+			/*
+			 * skip BTRFS_DEV_NONE_ONLY disks
+			 */
+			if (BTRFS_DEV_ALLOCATION_NONE_ONLY == hint)
+				continue;
+			/*
+			 * if a metadata chunk must be allocated,
+			 * sort also by hint (metadata hint
+			 * higher priority)
+			 */
+			if (BTRFS_DEV_ALLOCATION_PREFERRED_NONE == hint)
+				devices_info[ndevs].alloc_hint = -alloc_hint_map[hint];
+			else
+				devices_info[ndevs].alloc_hint = alloc_hint_map[hint];
+		}
+#endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
+
 		++ndevs;
 	}
 	ctl->ndevs = ndevs;
+
+#ifdef CONFIG_BTRFS_ALLOCATOR_HINTS
+	/*
+	 * no devices available
+	 */
+	if (!ndevs)
+		return 0;
+#endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
 
 	/*
 	 * now sort the devices by hole size / available space
 	 */
 	sort(devices_info, ndevs, sizeof(struct btrfs_device_info),
 	     btrfs_cmp_device_info, NULL);
+
+#ifdef CONFIG_BTRFS_ALLOCATOR_HINTS
+	/*
+	 * select the minimum set of disks grouped by hint that
+	 * can host the chunk
+	 */
+	ndevs = 0;
+	while (ndevs < ctl->ndevs) {
+		int hint = devices_info[ndevs++].alloc_hint;
+		while (ndevs < ctl->ndevs &&
+		       devices_info[ndevs].alloc_hint == hint)
+				ndevs++;
+		if (ndevs >= ctl->devs_min)
+			break;
+	}
+
+	/*
+	 * Fixed-width mirrored profiles consume only the first devs_max
+	 * candidates. Keep the highest-priority devices and only as many of
+	 * the final hint group as needed. The sort below then restores the
+	 * max_avail ordering required by the stripe-size calculation.
+	 *
+	 * Check the fixed-width property explicitly so a future variable-width
+	 * RAID1 profile retains the existing whole-group behavior.
+	 */
+	if ((ctl->type & BTRFS_BLOCK_GROUP_RAID1_MASK) &&
+	    ctl->devs_min == ctl->devs_max)
+		ndevs = min(ndevs, ctl->devs_max);
+
+	BUG_ON(ndevs > ctl->ndevs);
+	ctl->ndevs = ndevs;
+
+	/*
+	 * the next layers require the devices_info ordered by
+	 * max_avail. If we are returning two (or more) different
+	 * group of alloc_hint, this is not always true. So sort
+	 * these again.
+	 */
+
+	for (int i = 0 ; i < ndevs ; i++)
+		devices_info[i].alloc_hint = 0;
+
+	sort(devices_info, ndevs, sizeof(struct btrfs_device_info),
+	     btrfs_cmp_device_info, NULL);
+#endif /* CONFIG_BTRFS_ALLOCATOR_HINTS */
 
 	return 0;
 }
@@ -6062,7 +6198,293 @@ unsigned long btrfs_full_stripe_len(struct btrfs_fs_info *fs_info,
 	return len;
 }
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
+static unsigned int part_in_flight(struct block_device *part)
+{
+	unsigned int inflight = 0;
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		inflight += part_stat_local_read_cpu(part, in_flight[READ], cpu) +
+			    part_stat_local_read_cpu(part, in_flight[WRITE], cpu);
+	}
+	if ((int)inflight < 0)
+		inflight = 0;
+
+	return inflight;
+}
+
+static bool btrfs_queue_read_candidate_better(u64 in_flight, u64 last_io_age,
+					      u64 best_in_flight,
+					      u64 best_last_io_age)
+{
+	if (in_flight < best_in_flight)
+		return true;
+
+	if (in_flight == best_in_flight && last_io_age > best_last_io_age)
+		return true;
+
+	return false;
+}
+
+/*
+ * btrfs_earliest_stripe
+ *
+ * Select a stripe from the device with shortest in-flight requests. If several
+ * stripes have the same queue depth, prefer the stripe that has gone the
+ * longest without being selected.
+ */
+static int btrfs_read_earliest(struct btrfs_fs_info *fs_info,
+			       struct btrfs_chunk_map *map, int first,
+			       int num_stripes)
+{
+	u64 best_in_flight = U64_MAX;
+	u64 best_last_io_age = 0;
+	int best_stripe = first;
+
+	for (int index = first; index < first + num_stripes; index++) {
+		struct btrfs_device *device = map->stripes[index].dev;
+		u64 in_flight;
+		u64 last_io_age = atomic64_read(&device->last_io_age);
+
+		if (!device->bdev)
+			continue;
+
+		in_flight = part_in_flight(device->bdev);
+		if (btrfs_queue_read_candidate_better(in_flight, last_io_age,
+						      best_in_flight,
+						      best_last_io_age)) {
+			best_in_flight = in_flight;
+			best_last_io_age = last_io_age;
+			best_stripe = index;
+		}
+	}
+
+	return best_stripe;
+}
+
+#define BTRFS_READ_QUEUE_ADAPTIVE_MIN_GUARD	2ULL
+#define BTRFS_READ_QUEUE_ADAPTIVE_MAX_GUARD	16ULL
+
+#define BTRFS_READ_HEALTH_RECHECK_INTERVAL	HZ
+#define BTRFS_READ_HEALTH_MIN_SAMPLE_IOS	256ULL
+
+/*
+ * Refresh the cached windowed avg read latency for the current candidates.
+ * The avg is a delta against the previous checkpoint, not a lifetime average,
+ * so unrelated bulk reads can only skew the current window.
+ *
+ * Only queue-adaptive (btrfs_read_queue_adaptive(), below) calls this, so it
+ * lives right above its one caller instead of needing a forward declaration.
+ * It stays gated by CONFIG_BTRFS_READ_POLICIES alone (this whole block
+ * already is), matching that caller's own requirement - not the broader
+ * OR-guard the health_* struct fields use, since sysfs.c's read_stats
+ * display still needs those fields to exist whenever
+ * CONFIG_BTRFS_PER_DEVICE_IO_STATS is on, independent of whether
+ * CONFIG_BTRFS_READ_POLICIES (and therefore queue-adaptive) is enabled.
+ */
+static void btrfs_update_read_health(struct btrfs_chunk_map *map, int first,
+				     int num_stripes)
+{
+	for (int index = first; index < first + num_stripes; index++) {
+		struct btrfs_device *device = map->stripes[index].dev;
+		unsigned long checked_jiffies = READ_ONCE(device->health_check_jiffies);
+		u64 read_ios, read_ios_before, read_wait, checked_ios, checked_wait;
+		u64 delta_ios, delta_wait;
+
+		/*
+		 * A missing mirror has no bdev; part_stat_read() would
+		 * dereference it. Leave it unclassified (health_avg_ns stays
+		 * 0, "no data") - find_live_mirror()'s own tolerance loop
+		 * already avoids selecting it regardless of read policy.
+		 */
+		if (!device->bdev)
+			continue;
+
+		if (!time_after(jiffies, checked_jiffies + BTRFS_READ_HEALTH_RECHECK_INTERVAL))
+			continue;
+
+		/* Only one reader may advance a device's checkpoint each interval. */
+		if (cmpxchg(&device->health_check_jiffies, checked_jiffies, jiffies) !=
+		    checked_jiffies)
+			continue;
+
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+		atomic64_inc(&device->health_checks);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+
+		/*
+		 * ios is updated before nsecs. Bracket the wait read to reject a
+		 * completion that could pair newer wait time with an older io count.
+		 */
+		read_ios_before = part_stat_read(device->bdev, ios[READ]);
+		read_wait = part_stat_read(device->bdev, nsecs[READ]);
+		read_ios = part_stat_read(device->bdev, ios[READ]);
+		if (read_ios_before != read_ios) {
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+			atomic64_inc(&device->health_unstable);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+			continue;
+		}
+
+		checked_ios = atomic64_read(&device->health_check_ios);
+		checked_wait = atomic64_read(&device->health_check_wait);
+
+		if (checked_ios == 0 && checked_wait == 0 && read_ios != 0) {
+			atomic64_set(&device->health_check_ios, read_ios);
+			atomic64_set(&device->health_check_wait, read_wait);
+			continue;
+		}
+
+		delta_ios = read_ios >= checked_ios ? read_ios - checked_ios : read_ios;
+		delta_wait = read_wait >= checked_wait ? read_wait - checked_wait : read_wait;
+
+		if (delta_ios < BTRFS_READ_HEALTH_MIN_SAMPLE_IOS)
+			continue;
+
+		atomic64_set(&device->health_avg_ns, div64_u64(delta_wait, delta_ios));
+		atomic64_set(&device->health_check_ios, read_ios);
+		atomic64_set(&device->health_check_wait, read_wait);
+		WRITE_ONCE(device->health_avg_jiffies, jiffies);
+	}
+}
+
+/*
+ * btrfs_read_queue_adaptive
+ *
+ * Select the stripe with the lowest in-flight request count, exactly
+ * like btrfs_read_earliest(), with ties broken by device->last_io_age
+ * (most-overdue device wins) so healthy/idle mirrors still rotate fairly
+ * instead of collapsing onto the first stripe - the same tie-break
+ * btrfs_read_earliest() itself now uses via
+ * btrfs_queue_read_candidate_better(), so this is not a behavioral
+ * difference from plain queue.
+ *
+ * The one behavioral difference from plain queue: candidates are
+ * classified "slow" fresh, right here, by comparing each candidate's
+ * cached device->health_avg_ns against the best (lowest) value among
+ * only the *actual current* stripe candidates - never a cached verdict,
+ * so it can never be stale from a different mirror pairing on a larger
+ * pool. If the in-flight winner is not derived-slow, done. If it is,
+ * it's only trusted when its in-flight lead over the best non-slow
+ * candidate is more than their rounded-up latency ratio, clamped to a
+ * reasonable range. Otherwise the best non-slow candidate is used
+ * instead. This is a coarse veto, not the primary selector - on an
+ * all-healthy, same-tier array, no candidate is ever derived-slow and
+ * behavior is identical to queue. On a mixed-tier array (e.g. HDD
+ * mirrored against SSD) the slower device is durably derived-slow and
+ * mostly avoided, but can still absorb overflow once the faster
+ * candidate's queue backs up past the dynamic guard margin.
+ */
+static int btrfs_read_queue_adaptive(struct btrfs_fs_info *fs_info,
+				      struct btrfs_chunk_map *map, int first,
+				      int num_stripes)
+{
+	u64 avg[BTRFS_RAID1_MAX_MIRRORS];
+	u64 best_avg = U64_MAX;
+	u64 sick_threshold;
+	u64 best_inflight = U64_MAX;
+	u64 best_age = 0;
+	int best_stripe = first;
+	bool best_slow;
+	u64 best_healthy_inflight = U64_MAX;
+	u64 best_healthy_age = 0;
+	int best_healthy_stripe = -1;
+	u64 healthy_avg;
+	u64 guard;
+
+	btrfs_update_read_health(map, first, num_stripes);
+
+	/*
+	 * Gather this stripe's actual current candidates' cached avgs and find
+	 * the best among only them - this is the peer-relative derivation, done
+	 * fresh every call.
+	 */
+	for (int index = first; index < first + num_stripes; index++) {
+		struct btrfs_device *device = map->stripes[index].dev;
+		u64 my_avg;
+
+		if (!device->bdev) {
+			avg[index - first] = 0;
+			continue;
+		}
+
+		my_avg = atomic64_read(&device->health_avg_ns);
+		avg[index - first] = my_avg;
+		best_avg = min_not_zero(best_avg, my_avg);
+	}
+
+	/*
+	 * Overflow-safe threshold: saturate instead of wrapping in the
+	 * practically-impossible case that best_avg is already close to
+	 * U64_MAX; best_avg == U64_MAX (no candidate has data yet) also
+	 * saturates here, so nothing can be derived-slow without data.
+	 */
+	if (best_avg == U64_MAX || best_avg > U64_MAX / BTRFS_READ_HEALTH_SICK_MULTIPLIER)
+		sick_threshold = U64_MAX;
+	else
+		sick_threshold = best_avg * BTRFS_READ_HEALTH_SICK_MULTIPLIER;
+
+	for (int index = first; index < first + num_stripes; index++) {
+		struct btrfs_device *device = map->stripes[index].dev;
+		u64 in_flight;
+		u64 age = atomic64_read(&device->last_io_age);
+		u64 my_avg = avg[index - first];
+		bool slow = (my_avg != 0 && my_avg > sick_threshold);
+
+		if (!device->bdev)
+			continue;
+
+		in_flight = part_in_flight(device->bdev);
+		if (btrfs_queue_read_candidate_better(in_flight, age,
+						      best_inflight,
+						      best_age)) {
+			best_inflight = in_flight;
+			best_age = age;
+			best_stripe = index;
+		}
+		if (!slow &&
+		    btrfs_queue_read_candidate_better(in_flight, age,
+						      best_healthy_inflight,
+						      best_healthy_age)) {
+			best_healthy_inflight = in_flight;
+			best_healthy_age = age;
+			best_healthy_stripe = index;
+		}
+	}
+
+	best_slow = (avg[best_stripe - first] != 0 &&
+		     avg[best_stripe - first] > sick_threshold);
+	if (!best_slow)
+		return best_stripe;
+	if (best_healthy_stripe < 0)
+		return best_stripe; /* every candidate derived-slow, no alternative */
+
+	/*
+	 * Scale the guard with the latency difference to favor tail latency.
+	 * An unknown alternative keeps the previous minimum guard behavior.
+	 */
+	healthy_avg = avg[best_healthy_stripe - first];
+	guard = BTRFS_READ_QUEUE_ADAPTIVE_MIN_GUARD;
+
+	if (healthy_avg != 0) {
+		guard = DIV64_U64_ROUND_UP(avg[best_stripe - first], healthy_avg);
+		guard = clamp_t(u64, guard, BTRFS_READ_QUEUE_ADAPTIVE_MIN_GUARD,
+				BTRFS_READ_QUEUE_ADAPTIVE_MAX_GUARD);
+	}
+
+	if (best_healthy_inflight - best_inflight <= guard) {
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+		atomic64_inc(&map->stripes[best_stripe].dev->health_vetoed);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+		return best_healthy_stripe; /* slow device's lead is not more than the margin */
+	}
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+	atomic64_inc(&map->stripes[best_stripe].dev->health_overflow);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+	return best_stripe; /* slow device's lead is more than the margin - trust it anyway */
+}
+
 static int btrfs_read_preferred(struct btrfs_chunk_map *map, int first, int num_stripes)
 {
 	for (int index = first; index < first + num_stripes; index++) {
@@ -6130,7 +6552,7 @@ static int btrfs_read_rr(const struct btrfs_chunk_map *map, int first, int num_s
 	read_cycle = total_reads / min_reads_per_dev;
 	return stripes[read_cycle % num_stripes].num;
 }
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 static int find_live_mirror(struct btrfs_fs_info *fs_info,
 			    struct btrfs_chunk_map *map, int first,
@@ -6151,6 +6573,18 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	else
 		num_stripes = map->num_stripes;
 
+#if defined(CONFIG_BTRFS_READ_POLICIES) || defined(CONFIG_BTRFS_PER_DEVICE_IO_STATS)
+	/* age each possible stripe by 1 IO */
+	for (int i = first; i < first + num_stripes; i++) {
+		struct btrfs_device *device = map->stripes[i].dev;
+
+		atomic64_inc(&device->last_io_age);
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+		atomic64_inc(&device->stripe_ignored);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+	}
+#endif /* CONFIG_BTRFS_READ_POLICIES || CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+
 	switch (policy) {
 	default:
 		/* Shouldn't happen, just warn and use pid instead of failing */
@@ -6161,14 +6595,22 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	case BTRFS_READ_POLICY_PID:
 		preferred_mirror = first + (current->pid % num_stripes);
 		break;
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	case BTRFS_READ_POLICY_RR:
 		preferred_mirror = btrfs_read_rr(map, first, num_stripes);
+		break;
+	case BTRFS_READ_POLICY_QUEUE:
+		preferred_mirror = btrfs_read_earliest(fs_info, map, first,
+						       num_stripes);
+		break;
+	case BTRFS_READ_POLICY_QUEUE_ADAPTIVE:
+		preferred_mirror = btrfs_read_queue_adaptive(fs_info, map, first,
+							      num_stripes);
 		break;
 	case BTRFS_READ_POLICY_DEVID:
 		preferred_mirror = btrfs_read_preferred(map, first, num_stripes);
 		break;
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 	}
 
 	if (dev_replace_is_ongoing &&
@@ -6186,13 +6628,30 @@ static int find_live_mirror(struct btrfs_fs_info *fs_info,
 	for (tolerance = 0; tolerance < 2; tolerance++) {
 		if (map->stripes[preferred_mirror].dev->bdev &&
 		    (tolerance || map->stripes[preferred_mirror].dev != srcdev))
-			return preferred_mirror;
+			goto out;
 		for (i = first; i < first + num_stripes; i++) {
 			if (map->stripes[i].dev->bdev &&
-			    (tolerance || map->stripes[i].dev != srcdev))
-				return i;
+			    (tolerance || map->stripes[i].dev != srcdev)) {
+				preferred_mirror = i;
+				goto out;
+			}
 		}
 	}
+
+out:
+#if defined(CONFIG_BTRFS_READ_POLICIES) || defined(CONFIG_BTRFS_PER_DEVICE_IO_STATS)
+	do {
+		struct btrfs_device *preferred_device = map->stripes[preferred_mirror].dev;
+
+		/* reset age of selected stripe */
+		atomic64_set(&preferred_device->last_io_age, 0);
+
+#ifdef CONFIG_BTRFS_PER_DEVICE_IO_STATS
+		/* do not count ignores for the selected stripe */
+		atomic64_dec(&preferred_device->stripe_ignored);
+#endif /* CONFIG_BTRFS_PER_DEVICE_IO_STATS */
+	} while (0);
+#endif /* CONFIG_BTRFS_READ_POLICIES || CONFIG_BTRFS_PER_DEVICE_IO_STATS */
 
 	/* we couldn't find one that doesn't fail.  Just return something
 	 * and the io error handling code will clean up eventually

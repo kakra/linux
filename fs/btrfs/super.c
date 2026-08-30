@@ -2496,7 +2496,7 @@ static int __init btrfs_print_mod_info(void)
 #endif
 			;
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	if (btrfs_get_mod_read_policy() == NULL)
 		pr_info("Btrfs loaded%s\n", options);
 	else
@@ -2504,7 +2504,7 @@ static int __init btrfs_print_mod_info(void)
 			 options, btrfs_get_mod_read_policy());
 #else
 	pr_info("Btrfs loaded%s\n", options);
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 
 	return 0;
 }
@@ -2563,11 +2563,11 @@ static const struct init_sequence mod_init_seq[] = {
 	}, {
 		.init_func = btrfs_extent_map_init,
 		.exit_func = btrfs_extent_map_exit,
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
+#ifdef CONFIG_BTRFS_READ_POLICIES
 	}, {
 		.init_func = btrfs_read_policy_init,
 		.exit_func = NULL,
-#endif
+#endif /* CONFIG_BTRFS_READ_POLICIES */
 	}, {
 		.init_func = ordered_data_init,
 		.exit_func = ordered_data_exit,
