@@ -5419,6 +5419,19 @@ static int gather_device_info(struct btrfs_fs_devices *fs_devices,
 			break;
 	}
 
+	/*
+	 * Fixed-width mirrored profiles consume only the first devs_max
+	 * candidates. Keep the highest-priority devices and only as many of
+	 * the final hint group as needed. The sort below then restores the
+	 * max_avail ordering required by the stripe-size calculation.
+	 *
+	 * Check the fixed-width property explicitly so a future variable-width
+	 * RAID1 profile retains the existing whole-group behavior.
+	 */
+	if ((ctl->type & BTRFS_BLOCK_GROUP_RAID1_MASK) &&
+	    ctl->devs_min == ctl->devs_max)
+		ndevs = min(ndevs, ctl->devs_max);
+
 	BUG_ON(ndevs > ctl->ndevs);
 	ctl->ndevs = ndevs;
 
