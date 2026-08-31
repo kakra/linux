@@ -509,3 +509,6 @@
 577	common	open_tree_attr			sys_open_tree_attr
 578	common	file_getattr			sys_file_getattr
 579	common	file_setattr			sys_file_setattr
+580	common	process_ksm_enable		sys_process_ksm_enable
+581	common	process_ksm_disable		sys_process_ksm_disable
+582	common	process_ksm_status		sys_process_ksm_status
