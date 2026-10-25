@@ -414,7 +414,7 @@ static bool check_should_bypass(struct cached_dev *dc, struct bio *bio)
 	 * lower-priority IO class+value has a greater numeric value. */
 	ioprio = bio->bi_ioprio;
 	if (!(bio->bi_opf & (REQ_META|REQ_PRIO))
-		&& ioprio_valid(ioprio) && ioprio_valid(dc->ioprio_writeback)
+		&& ioprio_valid(ioprio) && ioprio_valid(dc->ioprio_bypass)
 		&& ioprio >= dc->ioprio_bypass) {
 		goto skip;
 	}
