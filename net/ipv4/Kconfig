@@ -759,6 +759,7 @@ config DEFAULT_TCP_CONG
 	default "dctcp" if DEFAULT_DCTCP
 	default "cdg" if DEFAULT_CDG
 	default "bbr" if DEFAULT_BBR
+	default "bbr3" if DEFAULT_BBR3
 	default "cubic"
 
 config TCP_AO
