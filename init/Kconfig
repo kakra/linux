@@ -223,6 +223,39 @@ config THREAD_INFO_IN_TASK
 
 menu "General setup"
 
+config ZEN_INTERACTIVE
+	bool "Tune kernel for interactivity"
+	default y
+	help
+	  Tunes the kernel for responsiveness at the cost of throughput and power usage.
+
+	  --- Block Layer ----------------------------------------
+
+	    Default scheduler for SQ..: mq-deadline ->   bfq
+	    Default scheduler for MQ..:        none ->   kyber
+
+	  --- Virtual Memory Subsystem ---------------------------
+
+	    Background-reclaim hugepages...:   no   ->   yes
+	    Swap-in readahead..............:   3    ->   0
+
+	  --- EEVDF CPU Scheduler --------------------------------
+
+	    Minimal granularity............:   0.7  ->   0.4  ms
+	    Migration cost.................:   0.5  ->   0.3  ms
+	    Bandwidth slice size...........:   5    ->   3    ms
+	    Task rebalancing threshold.....:  32    ->   8
+
+	  --- CPUFreq Settings -----------------------------------
+
+	    Ondemand sampling down factor..:   1    ->   5
+	    Ondemand default up threshold..:  80    ->  55
+	    Ondemand micro up threshold....:  95    ->  60
+
+	  --- Split/Bus lock detection --------------------------
+
+	    Split lock mitigation..........:   1    ->   0
+
 config BROKEN
 	bool
 	help
