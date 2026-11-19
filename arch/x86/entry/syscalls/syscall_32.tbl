@@ -478,3 +478,6 @@
 470	i386	listns			sys_listns
 471	i386	rseq_slice_yield	sys_rseq_slice_yield
 472	i386	fchroot			sys_fchroot
+473	i386	process_ksm_enable	sys_process_ksm_enable
+474	i386	process_ksm_disable	sys_process_ksm_disable
+475	i386	process_ksm_status	sys_process_ksm_status
