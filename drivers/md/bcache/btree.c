@@ -2823,7 +2823,7 @@ void bch_btree_exit(void)
 int __init bch_btree_init(void)
 {
 	btree_io_wq = alloc_workqueue("bch_btree_io",
-				      WQ_MEM_RECLAIM | WQ_PERCPU, 0);
+				      WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
 	if (!btree_io_wq)
 		return -ENOMEM;
 
